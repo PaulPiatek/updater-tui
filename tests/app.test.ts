@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BoxRenderable } from "@opentui/core";
-import { App } from "../src/ui/app";
+import { App, exitCodeFor } from "../src/ui/app";
 
 /** Builds a temp project with one custom script so discovery has something. */
 async function project(): Promise<{ cwd: string; dispose: () => Promise<void> }> {
@@ -124,5 +124,53 @@ describe("App (imperative UI)", () => {
       setup.renderer.destroy();
       await proj.dispose();
     }
+  });
+
+  test("`a` toggles the sources all on and all off", async () => {
+    const proj = await project();
+    const setup = await createTestRenderer({ width: 120, height: 30 });
+    let app: App | undefined;
+    try {
+      app = new App(setup.renderer, {
+        cwd: proj.cwd,
+        sourceFilter: ["custom"],
+        dryRun: false,
+      });
+      void app.run();
+      // Starts with the available source checked.
+      await frame(setup, (text) => text.includes("[x] Custom scripts"));
+
+      // `a` clears them.
+      setup.mockInput.pressKey("a");
+      let text = await frame(setup, (f) => f.includes("[ ] Custom scripts"));
+      expect(text).toContain("[ ] Custom scripts");
+
+      // `a` again selects them.
+      setup.mockInput.pressKey("a");
+      text = await frame(setup, (f) => f.includes("[x] Custom scripts"));
+      expect(text).toContain("[x] Custom scripts");
+    } finally {
+      app?.destroy();
+      setup.renderer.destroy();
+      await proj.dispose();
+    }
+  });
+});
+
+describe("exitCodeFor", () => {
+  test("0 when nothing failed", () => {
+    expect(exitCodeFor("Done: 3 upgraded, 0 failed.")).toBe(0);
+    expect(exitCodeFor("Nothing to do 🎉")).toBe(0);
+    expect(exitCodeFor("Nothing to do.")).toBe(0);
+  });
+
+  test("1 when any upgrade failed", () => {
+    expect(exitCodeFor("Done: 2 upgraded, 1 failed.")).toBe(1);
+  });
+
+  test("1 for a failed start or scan, not just the word 'errors'", () => {
+    expect(exitCodeFor("Cannot start.")).toBe(1);
+    expect(exitCodeFor("Scan failed.")).toBe(1);
+    expect(exitCodeFor("Finished with errors.")).toBe(1);
   });
 });

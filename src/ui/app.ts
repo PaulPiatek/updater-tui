@@ -340,7 +340,13 @@ export class App {
           this.refresh();
         }
       } else if (key.name === "a") {
-        this.state = setAllSources(current, current.selectedSources.size === 0);
+        // Toggle: all on → all off, otherwise all on. Compares against every
+        // *available* source, so a locked one never blocks the toggle.
+        const allAvailable = current.sources.filter((s) => s.available).length;
+        this.state = setAllSources(
+          current,
+          current.selectedSources.size !== allAvailable,
+        );
         this.refresh();
       } else if (key.name === "return") {
         void this.runScan();
@@ -474,8 +480,16 @@ export class App {
   }
 }
 
+/**
+ * Maps a final summary line to a process exit code.
+ *
+ * `Done: N upgraded, M failed.` → 1 when anything failed. Any other summary is
+ * a failure too ("Cannot start.", "Scan failed.", "Finished with errors."),
+ * except the explicit nothing-to-do case.
+ */
 export function exitCodeFor(summary: string): number {
   const match = /Done: \d+ upgraded, (\d+) failed/.exec(summary);
   if (match) return Number(match[1]) > 0 ? 1 : 0;
-  return /errors/i.test(summary) ? 1 : 0;
+  if (/nothing to do/i.test(summary)) return 0;
+  return 1;
 }
