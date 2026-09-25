@@ -1,0 +1,19 @@
+{
+  "name": "updater-tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "updater-tui": "./src/index.tsx"
+  },
+  "scripts": {
+    "start": "bun run src/index.tsx",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
+  }
+}
