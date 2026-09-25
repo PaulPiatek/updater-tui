@@ -163,11 +163,94 @@ Keep the old repo's standards:
 
 ## Testing interactive UI
 
-You cannot drive a TUI by piping stdin — it needs a real terminal. Use **Bun's
-built-in PTY** (`Bun.spawn(cmd, { terminal: { cols, rows, data } })`, ConPTY on
-Windows) and reconstruct the screen with `@xterm/headless`. This is how the old
-repo's UI was verified byte-for-byte. Install `@xterm/headless` only in a temp
-harness dir, **never in this app's dependencies**.
+You cannot drive a TUI by piping stdin — it needs a real terminal. Two layers:
+
+- **Unit / frame tests:** `@opentui/core/testing` gives an in-memory renderer
+  (`createTestRenderer`, `captureCharFrame`, `mockInput`, `waitForFrame`). This
+  is deterministic and is what `tests/checklist.test.ts` and `tests/app.test.ts`
+  use. Prefer this — no PTY, no diffing, no flake.
+- **End-to-end:** `scripts/pty-check.ts` spawns the real app on **Bun's built-in
+  PTY** (`Bun.spawn(cmd, { terminal: { … } })`, ConPTY on Windows) and watches
+  the raw stream for markers. `scripts/pty-exe-check.ts` does the same for the
+  built `dist/updater-tui.exe`. These are manual harnesses (tens of seconds), not
+  part of `bun test`.
+
+A PTY's output is **diffed** — a static screen emits almost nothing, so don't
+assert on "the screen contains X" there; assert on a marker that implies a
+*change* (a scan line, a result). For frame assertions use the test renderer.
+
+`@xterm/headless` is not needed (and must not be added to app deps).
+
+---
+
+## Why the UI is imperative (no Solid/React)
+
+OpenTUI has `@opentui/solid` and `@opentui/react` bindings, and they work from
+source — **but not in `bun build --compile` executables.** Verified with minimal
+probes: a compiled Solid app mounts once and then never re-renders. A timer
+driven `createSignal` never updates, `useKeyboard` never fires, and
+`renderer.destroy()` never resolves. The equivalent **core** app compiles and
+works fine.
+
+Since a standalone `.exe` is a requirement, the UI uses **`@opentui/core`'s
+imperative API** (`BoxRenderable`, `TextRenderable`, `ScrollBoxRenderable`, and
+`renderer.keyInput`). Do not reintroduce a reactive binding without first
+re-verifying it survives `bun run build:exe` — see `scripts/pty-exe-check.ts`.
+
+Two more consequences of the exe:
+
+- **No `bunfig.toml`.** A compiled exe re-reads `bunfig.toml` from the current
+  directory and fails with `preload not found "…"` when run elsewhere. There is
+  no `bunfig.toml` in this repo for that reason. The preload/transform is not
+  needed because the UI has no JSX.
+- **Test the exe from another directory** (`scripts/pty-exe-check.ts` runs with
+  `cwd` set to a temp dir) — that is the case that catches the above.
+
+---
+
+## Layout: size panes with flex weights, not `%`
+
+The two panes in `src/ui/app.ts` use `flexGrow: 1` + `flexBasis: 0`, **not**
+`width: "50%"`. A percentage on a pane nested inside the app's root box resolved
+against the wrong basis: the pane stayed a fixed width while the terminal grew,
+so changing `45%` → `50%` → `60%` looked identical on screen. Measured with the
+real `App` tree at a 180-column terminal, `width: "50%"` produced a 60-column
+pane; flex weights produce 90.
+
+`tests/app.test.ts` has a regression test that asserts the panes fill the
+terminal and each stays near half at 120/180/200 columns. When a pane looks the
+wrong size, **measure the real tree** (`setup.renderer.root.getChildren()…`) —
+eyeballing a screenshot of a nested flex layout is how this was mis-diagnosed
+twice.
+
+---
+
+## Rejected: streaming child output into the pane
+
+A feature was built and then reverted: run custom scripts (and npm/winget) on a
+pty and render their output live in the right pane via OpenTUI's
+`EmbeddedTerminalRenderable`, instead of suspend/resume.
+
+What was **proven** before abandoning it:
+
+- `EmbeddedTerminalRenderable` works on Windows x64 — **including inside a
+  compiled exe** — fed by `new Bun.Terminal()`. Output renders, typed keys reach
+  the child, prompts work. (`Bun.spawn(..., { terminal })` is documented
+  POSIX-only, but a `Bun.Terminal` instance works on Windows.)
+- **Elevated commands cannot be captured.** `Start-Process -Verb RunAs` opens its
+  own console, so a pty sees nothing. Windows Update must stay on
+  suspend/resume regardless.
+
+Why it was reverted: inside the running app the streamed child exited
+immediately instead of waiting at its prompt, and the cause was not isolated.
+The same script/argv/cwd/env on the same pty behaved correctly *outside* the app,
+so it is something about the live-renderer context.
+
+**If you retry this**, build the in-process harness first: a live test renderer +
+the panel + a simulated Enter key, iterated with `bun test`. The PTY-based
+debugging used here took ~30s per run and was the main time sink. Also note the
+app's `keyInput` listeners run *before* the focused renderable — check whether
+the key that starts the upgrade is being delivered into a freshly spawned pty.
 
 ---
 
@@ -177,17 +260,26 @@ harness dir, **never in this app's dependencies**.
 - Bun 1.4.2, Node 24.x.
 - Package managers present: `npm`, `winget`, `bun`, `uv`. **No** scoop/choco/
   pipx/cargo/go/gem.
-- `~/.local/bin` is on PATH (uv Python shims, and the old `updater.exe`).
+- `~/.local/bin` is on PATH (uv Python shims, the old `updater.exe`, and now
+  `updater-tui.exe`).
 
 ---
 
-## Status / TODO
+## Status
 
-- [ ] **Research OpenTUI first** (API, Windows support, pane/focus/scroll,
-      examples — ideally how `opencode` uses it) before writing UI code.
-- [ ] Verify OpenTUI installs and renders on this machine.
-- [ ] Design the layout: left = two-stage selection, right = output, bottom =
-      summary/exit.
-- [ ] Port the app flow; wire `Source`/config/`console-mode.ts` in.
-- [ ] Solve script output inside a full-screen app (see rule 3).
-- [ ] Decide: share the old config file, or a new one.
+Done:
+
+- [x] Researched OpenTUI, verified it renders on this machine.
+- [x] Layout: left = two-stage selection, right = output, bottom = summary/hints.
+- [x] Ported the flow; `Source`/config/`console-mode.ts` wired in.
+- [x] Script output inside the full-screen app — see rule 3 (suspend/resume).
+- [x] Config is **shared** with the old tool (same files, nothing new to decide).
+- [x] `build:exe` + `install` revived (see the imperative-UI note above).
+
+Not done / deliberately:
+
+- No `--source` in the TUI's own UI (it is a CLI filter only). The picker is the
+  way to choose sources interactively.
+- No in-GUI pin/ignore toggle (config-only, same as the old repo).
+- No `@xterm/headless`: the test renderer covers frame assertions.
+
