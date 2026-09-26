@@ -5,9 +5,11 @@ npm packages**, **Windows Package Manager (winget)** packages, **Windows Update*
 software updates, and runs your own **custom update scripts** — all from one
 pane-based UI.
 
-It is a from-scratch rewrite of the clack-based [`updater`](../updater): same job,
-same sources and config, but the terminal UI is now
-[OpenTUI](https://opentui.com) (the library `opencode` uses).
+It is a from-scratch rewrite of the clack-based
+[`updater`](https://github.com/PaulPiatek/updater): same job, same sources and
+config, but the terminal UI is now [OpenTUI](https://opentui.com) (the library
+`opencode` uses). The lean, prompt-driven original lives at
+[PaulPiatek/updater](https://github.com/PaulPiatek/updater).
 
 ## The UI
 
