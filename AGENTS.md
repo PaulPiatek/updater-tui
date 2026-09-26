@@ -159,6 +159,37 @@ Keep the old repo's standards:
   (except custom-source tests, which use local temp `.cmd` files).
 - Run `bun test` and `bun run typecheck` before committing.
 
+### Building and installing
+
+To ship a fresh binary:
+
+```sh
+bun run build:exe && bun run install
+```
+
+`install` copies `dist/updater-tui.exe` (~93 MB) to
+`%USERPROFILE%\.local\bin\updater-tui.exe` (already on PATH), asking for
+confirmation; `--yes` skips the prompt. It stages to a `.new` file and renames,
+so re-installing over a running `updater-tui.exe` is safe.
+
+Two gotchas learned the hard way:
+
+- **If the copy is interrupted** (e.g. an agent harness kills the process
+  mid-copy), a stale `updater-tui.exe` is left in place and the install reports
+  nothing. Verify by timestamp/size against the fresh `dist/updater-tui.exe`. A
+  direct `Copy-Item` to a `.new` file followed by `Move-Item` is the equivalent
+  recovery.
+- **Always rebuild before installing** to test a fix — the installed exe is a
+  snapshot, not a link to the source. `bun run start` reads the source directly,
+  so it picks up changes without a rebuild.
+
+This repo's exe is larger (OpenTUI) and, like the old one, **unsigned** —
+SmartScreen may warn on first run.
+
+> Both apps live in `~/.local/bin` and **share one config**
+> (`~/.config/updater/config.json`), so a `scripts` entry added for one appears
+> in the other with no code changes.
+
 ---
 
 ## Testing interactive UI
