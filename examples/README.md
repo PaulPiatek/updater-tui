@@ -18,11 +18,15 @@ It uses mechanisms verified to exist on current Windows 11 Pro versions:
 
 - `rundll32 AppxDeploymentClient.dll,ScheduleAppInstallerBackgroundUpdate`
   (the Appx/app-installer background update)
-- the `InstallService` scheduled tasks `ScanForUpdates` / `ScanForUpdatesAsUser`
-- the MDM update-scan method, when accessible (usually needs admin; optional)
+- the `InstallService` scheduled task `ScanForUpdatesAsUser` (runs as *AllUsers*,
+  so it starts without elevation)
+- the MDM update-scan method, when accessible (optional)
 
-`ScanForUpdates` normally needs elevation and is skipped with a note when it
-fails — that is expected, not an error.
+**No UAC prompt.** `ScanForUpdates` (the sibling task, which runs as *SYSTEM* and
+does need admin to start) is deliberately not used: it drives the same
+InstallService scan code path, so prompting for it would buy little. The script
+confirms the per-user task actually ran by comparing its `LastRunTime` before and
+after, rather than trusting that `Start-ScheduledTask` didn't throw.
 
 ## `msys-update.ps1` — update an MSYS2 install (`pacman -Syu`)
 
