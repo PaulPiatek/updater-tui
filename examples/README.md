@@ -36,6 +36,8 @@ so pacman gets the right environment (DLLs, `/etc`, its database). Point the
 - **Interactive** — pacman's prompts reach the real terminal (the updater gives
   scripts the real stdin/stdout). Add `-NoConfirm` via `args` for `--noconfirm`.
 - Output streams live, and the exit code is pacman's.
+- **Ends with a "press any key" pause** so you can read the result. It is
+  guarded, so a piped or scripted run skips it instead of blocking.
 
 ### Wiring them up
 

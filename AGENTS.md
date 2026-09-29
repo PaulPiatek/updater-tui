@@ -91,19 +91,32 @@ custom scripts' own `pause`/`input()` — can't read keys.
 `proc.run()` so the console is restored. Verified: `0x1f7` → `0x1f7` even when a
 child leaves it at raw `0x208`.
 
-### 3. Custom scripts inherit the real terminal
+### 3. Custom scripts inherit the real terminal — solved with suspend/resume
 
-Scripts run with `stdin/stdout/stderr: "inherit"` so their output streams live
-and their prompts work. In a **full-screen OpenTUI app** this is trickier than in
-clack — think about this early:
+The `custom` source declares `runMode: "stream"`, and `App.runUpgrade` suspends
+the renderer around it: `renderer.suspend()` → run the child with an inherited
+terminal → `renderer.resume()`. The child therefore sees a normal terminal (its
+prompts work) without corrupting the OpenTUI screen.
 
-- You cannot just let a child write to the terminal while OpenTUI owns the
-  screen; you'll corrupt the UI.
-- Likely approach: suspend/exit OpenTUI's screen (or use a dedicated output
-  pane plus a pty) around an inherited script, then resume. **Research and test
-  this specifically** — it's the hardest integration point.
-- The `custom` source already declares `runMode: "stream"`; use that to know
-  when output is coming from the child rather than a captured command.
+- Route inherited children through `proc.run(..., { inherit: true })` so the
+  Windows console mode is restored (rule 2).
+- Suspend/resume is verified end to end in `scripts/pty-check.ts`.
+- **Elevated children cannot be captured or pty-hosted.** `Start-Process -Verb
+  RunAs` opens its own console, so Windows Update keeps the same suspend/resume
+  path and cannot stream (see the rejected-feature note below).
+
+A script does **not** need a trailing `pause` — but it may keep one to let the
+user read the output. Any such pause must be guarded so a piped or scripted run
+can't block (the same rule as `scripts/install.ts`):
+
+```powershell
+if ($Host.UI.RawUI -and -not [Console]::IsInputRedirected) {
+  Write-Host "Press any key to continue..."
+  $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+}
+```
+
+`examples/msys-update.ps1` ends this way.
 
 ### 4. Windows gotchas (from the old repo)
 

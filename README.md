@@ -145,8 +145,17 @@ Add executables to the `scripts` array; each becomes a `Custom scripts` row:
 
 **Scripts take over the terminal.** When a script runs, the TUI *suspends*,
 the script gets the real stdin/stdout/stderr (so its output streams live and its
-prompts work), then the TUI resumes. That means a script does **not** need a
-`pause` / `Read-Host` / `input()` at the end — remove those.
+prompts work), then the TUI resumes. Because the terminal stays open for the
+whole run, a script does **not** need a `pause` at the end — but one is fine if
+you want to read the output. If you add one, guard it so a piped or scripted run
+cannot block:
+
+```powershell
+if ($Host.UI.RawUI -and -not [Console]::IsInputRedirected) {
+  Write-Host "Press any key to continue..."
+  $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+}
+```
 
 Use `interpreter` for types Windows can't execute directly (e.g. `.py` with no
 file association). A missing executable is shown locked (`· not found`).

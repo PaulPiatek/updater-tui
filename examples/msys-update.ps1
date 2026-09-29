@@ -76,4 +76,12 @@ if ($pass -ge $maxPasses) {
   Write-Host "Stopped after $maxPasses passes — re-run if pacman still reports updates."
 }
 
+# Keep the window up so the output can be read. Skipped when there is no
+# interactive console (piped output, CI), so this can never hang.
+if ($Host.UI.RawUI -and -not [Console]::IsInputRedirected) {
+  Write-Host ""
+  Write-Host "Press any key to continue..."
+  $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+}
+
 exit $exit
