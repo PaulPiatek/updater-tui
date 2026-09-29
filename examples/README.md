@@ -14,7 +14,7 @@ updates**, so this is a **fire-and-forget trigger**: it asks Windows to scan for
 and install Store updates in the background, then returns. It cannot show
 progress or list packages — open **Store → Library → "Get updates"** to watch it.
 
-It uses mechanisms verified to exist on Windows 11:
+It uses mechanisms verified to exist on current Windows 11 Pro versions:
 
 - `rundll32 AppxDeploymentClient.dll,ScheduleAppInstallerBackgroundUpdate`
   (the Appx/app-installer background update)

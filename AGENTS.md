@@ -138,20 +138,20 @@ if ($Host.UI.RawUI -and -not [Console]::IsInputRedirected) {
 #### Why Windows Update uses the WUA COM API, not `UsoClient.exe`
 
 `UsoClient.exe` is **not a supported interface** and cannot replace the WUA
-scripts. Verified on this machine (Windows 11): it emits **no output at all**, so
-it cannot list pending updates, and the install verbs are rejected —
+scripts. Verified on current Windows 11 Pro versions: it emits **no output at
+all**, so it cannot list pending updates, and the install verbs are rejected —
 `StartScan` returns `0` (while doing nothing observable) but `StartDownload`,
 `StartInstall`, `RefreshSettings` and `ResumeUpdate` all return **87**
 (`ERROR_INVALID_PARAMETER`). `0`-on-failure is the same "reports success
 regardless" trap this project has already been bitten by.
 
 It is an undocumented internal tool for the Update Orchestrator service
-(`UsoSvc`); `wuauclt` is documented by Microsoft as deprecated, and on this
-machine `/DetectNow` also just exits `0` without output. **Don't re-investigate
-either** — `Microsoft.Update.Session` (the WUA COM API) is the API to use, and it
-is what `src/sources/windows-update.ts` already does. It also gives what
-`UsoClient` cannot: a list with titles/KBs/sizes, per-update results, and one
-elevated batch (one UAC prompt).
+(`UsoSvc`); `wuauclt` is documented by Microsoft as deprecated, and on current
+Windows 11 Pro versions `/DetectNow` also just exits `0` without output. **Don't
+re-investigate either** — `Microsoft.Update.Session` (the WUA COM API) is the API
+to use, and it is what `src/sources/windows-update.ts` already does. It also
+gives what `UsoClient` cannot: a list with titles/KBs/sizes, per-update results,
+and one elevated batch (one UAC prompt).
 
 ### 6. Never let a non-interactive path hang
 
@@ -316,9 +316,9 @@ the key that starts the upgrade is being delivered into a freshly spawned pty.
 
 ---
 
-## Environment (this machine)
+## Environment
 
-- Windows 11 Pro, Windows Terminal (PowerShell 7).
+- Windows 11 Pro (current versions), Windows Terminal (PowerShell 7).
 - Bun 1.4.2, Node 24.x.
 - Package managers present: `npm`, `winget`, `bun`, `uv`. **No** scoop/choco/
   pipx/cargo/go/gem.
@@ -331,7 +331,7 @@ the key that starts the upgrade is being delivered into a freshly spawned pty.
 
 Done:
 
-- [x] Researched OpenTUI, verified it renders on this machine.
+- [x] Researched OpenTUI, verified it renders on current Windows 11 Pro versions.
 - [x] Layout: left = two-stage selection, right = output, bottom = summary/hints.
 - [x] Ported the flow; `Source`/config/`console-mode.ts` wired in.
 - [x] Script output inside the full-screen app — see rule 3 (suspend/resume).
