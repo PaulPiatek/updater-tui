@@ -5,10 +5,11 @@ npm packages**, **Windows Package Manager (winget)** packages, **Windows Update*
 software updates, and runs your own **custom update scripts** — all from one
 pane-based UI.
 
-It is a from-scratch rewrite of the clack-based
+It is a from-scratch rewrite of the retired clack-based
 [`updater`](https://github.com/PaulPiatek/updater): same job, same sources and
 config, but the terminal UI is now [OpenTUI](https://opentui.com) (the library
-`opencode` uses). The lean, prompt-driven original lives at
+`opencode` uses). This project supersedes it — the original is kept only for
+reference. It is the lean, prompt-driven implementation at
 [PaulPiatek/updater](https://github.com/PaulPiatek/updater).
 
 ## The UI
@@ -149,6 +150,13 @@ prompts work), then the TUI resumes. That means a script does **not** need a
 
 Use `interpreter` for types Windows can't execute directly (e.g. `.py` with no
 file association). A missing executable is shown locked (`· not found`).
+
+See [`examples/`](examples/) for ready-made scripts and how to wire them up:
+
+- [`store-update.ps1`](examples/store-update.ps1) — triggers Microsoft Store app
+  updates.
+- [`msys-update.ps1`](examples/msys-update.ps1) — updates an MSYS2 install
+  (`pacman -Syu`, looping until done).
 
 ### Rule syntax
 
