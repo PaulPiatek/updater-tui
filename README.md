@@ -255,3 +255,13 @@ Adding a source is unchanged from the old tool: implement `Source` in
 `src/sources/` and register it in `src/sources/index.ts`. The engine, TUI,
 `--json`, `--dry-run` and `--yes` all pick it up automatically. Sources stay
 self-contained adapters — the app knows nothing tool-specific.
+
+### Windows Update uses the WUA COM API
+
+`src/sources/windows-update.ts` uses `Microsoft.Update.Session` through
+PowerShell, not `UsoClient.exe` or `wuauclt`. Both of those are unsupported:
+`UsoClient` is an undocumented internal tool for the Update Orchestrator service
+— it prints nothing (so it cannot list updates) and its install verbs return
+`87`/`ERROR_INVALID_PARAMETER`. The COM API is the only one that gives what the
+picker needs: a list with titles/KBs/sizes, per-update results, and one elevated
+batch (one UAC prompt). See `AGENTS.md` for the measurements.

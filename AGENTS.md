@@ -135,6 +135,24 @@ if ($Host.UI.RawUI -and -not [Console]::IsInputRedirected) {
 - **Windows Update** JSON via PowerShell: `ConvertTo-Json` returns an object for
   one item, an array for many — handle both. UTF-8 output + strip BOM.
 
+#### Why Windows Update uses the WUA COM API, not `UsoClient.exe`
+
+`UsoClient.exe` is **not a supported interface** and cannot replace the WUA
+scripts. Verified on this machine (Windows 11): it emits **no output at all**, so
+it cannot list pending updates, and the install verbs are rejected —
+`StartScan` returns `0` (while doing nothing observable) but `StartDownload`,
+`StartInstall`, `RefreshSettings` and `ResumeUpdate` all return **87**
+(`ERROR_INVALID_PARAMETER`). `0`-on-failure is the same "reports success
+regardless" trap this project has already been bitten by.
+
+It is an undocumented internal tool for the Update Orchestrator service
+(`UsoSvc`); `wuauclt` is documented by Microsoft as deprecated, and on this
+machine `/DetectNow` also just exits `0` without output. **Don't re-investigate
+either** — `Microsoft.Update.Session` (the WUA COM API) is the API to use, and it
+is what `src/sources/windows-update.ts` already does. It also gives what
+`UsoClient` cannot: a list with titles/KBs/sizes, per-update results, and one
+elevated batch (one UAC prompt).
+
 ### 6. Never let a non-interactive path hang
 
 Any prompt or wait must check `process.stdin.isTTY` / `process.stdout.isTTY`
