@@ -153,6 +153,42 @@ to use, and it is what `src/sources/windows-update.ts` already does. It also
 gives what `UsoClient` cannot: a list with titles/KBs/sizes, per-update results,
 and one elevated batch (one UAC prompt).
 
+#### Microsoft Store uses the StoreCLI (`store.exe`), not a script
+
+Windows 11 ships a supported `store` command inside the Microsoft Store app (an
+app-execution alias to `store.exe`). `src/sources/store.ts` uses it directly:
+`store updates` lists pending apps, `store update <app> --apply` installs one.
+This replaced the old `rundll32 AppxDeploymentClient.dll,ScheduleAppInstallerBackgroundUpdate`
++ `ScanForUpdatesAsUser` scheduled-task trigger and its `store-update.ps1`
+example — do not bring those back.
+
+**Do not confuse it with `microsoft/msstore-cli` (`msstore.exe`)** — that repo is
+the Partner Center *publishing* CLI (`apps list`, `submission`, `publish`,
+requires Azure AD credentials). It cannot list or update the apps installed on a
+machine. Different tool, different job.
+
+Two behaviours to remember (both handled in `src/sources/store.ts`):
+
+- Output is a **coloured box table on stdout** (CRLF), with **no `--json`**.
+- The **exit code is untrustworthy**: an unknown parameter prints
+  `Unknown parameter(s): …` and still exits `0`. Parse the output; don't trust
+  `$?`.
+
+The `updates` table columns are **Name / Publisher / Version / Date** (verified
+against a real pending update) — the same renderer as `installed`, and with **no
+target-version column**, so `latest` is `"update"` and the picker shows
+`1.24.11321.0 → update`. The parser is header-driven (like the winget table
+parser) and is exercised against **real captured output** in
+`tests/store.test.ts` (both `updates` and `installed`, the latter for wrapped
+cells).
+
+`store updates` is **interactive**: even without `--apply` it asks "Would you
+like to install the N Store update(s) now? [y/n]". With no stdin it prints
+`Failed to read input in non-interactive mode.` and installs nothing, so listing
+through `proc.run` is safe. **Never list with `--apply`** — that is the install.
+Results are read from the output (`✅ Installed` / `❌ Cancelled` / `❌ Error`),
+not from the exit code.
+
 ### 6. Never let a non-interactive path hang
 
 Any prompt or wait must check `process.stdin.isTTY` / `process.stdout.isTTY`
@@ -337,6 +373,9 @@ Done:
 - [x] Script output inside the full-screen app — see rule 3 (suspend/resume).
 - [x] Config is **shared** with the old tool (same files, nothing new to decide).
 - [x] `build:exe` + `install` revived (see the imperative-UI note above).
+- [x] Microsoft Store apps as a first-class source via the StoreCLI (`store.exe`)
+  — see rule 5. Parses the real Name/Publisher/Version/Date table; the one gap is
+  that the CLI exposes no target version, so items read `current → update`.
 
 Not done / deliberately:
 

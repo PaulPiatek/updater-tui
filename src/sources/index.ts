@@ -2,6 +2,7 @@ import type { LoadedConfig } from "../config";
 import type { Source } from "../types";
 import { createCustomSource } from "./custom";
 import { npmSource } from "./npm";
+import { storeSource } from "./store";
 import { wingetSource } from "./winget";
 import { windowsUpdateSource } from "./windows-update";
 
@@ -12,6 +13,7 @@ import { windowsUpdateSource } from "./windows-update";
 export const builtinSources: Source[] = [
   npmSource,
   wingetSource,
+  storeSource,
   windowsUpdateSource,
 ];
 

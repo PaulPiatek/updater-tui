@@ -4,29 +4,15 @@ Ready-made scripts you can reference from your updater config's `scripts` array.
 They are **examples, not code** — the app never imports them; you point your
 config at them (or copy them to your own location and edit freely).
 
-Both are PowerShell, so both need an **interpreter** (see [Wiring them
-up](#wiring-them-up)) — `.ps1` files generally have no Windows file association.
+They are PowerShell, so each needs an **interpreter** (see [Wiring it
+up](#wiring-it-up)) — `.ps1` files generally have no Windows file association.
 
-## `store-update.ps1` — trigger Microsoft Store app updates
-
-Windows exposes **no supported CLI to list pending Store (MSIX/Appx) app
-updates**, so this is a **fire-and-forget trigger**: it asks Windows to scan for
-and install Store updates in the background, then returns. It cannot show
-progress or list packages — open **Store → Library → "Get updates"** to watch it.
-
-It uses mechanisms verified to exist on current Windows 11 Pro versions:
-
-- `rundll32 AppxDeploymentClient.dll,ScheduleAppInstallerBackgroundUpdate`
-  (the Appx/app-installer background update)
-- the `InstallService` scheduled task `ScanForUpdatesAsUser` (runs as *AllUsers*,
-  so it starts without elevation)
-- the MDM update-scan method, when accessible (optional)
-
-**No UAC prompt.** `ScanForUpdates` (the sibling task, which runs as *SYSTEM* and
-does need admin to start) is deliberately not used: it drives the same
-InstallService scan code path, so prompting for it would buy little. The script
-confirms the per-user task actually ran by comparing its `LastRunTime` before and
-after, rather than trusting that `Start-ScheduledTask` didn't throw.
+> Microsoft Store updates are **no longer a script**: they are a built-in source
+> (`Microsoft Store apps`) driven by the official StoreCLI — `store updates`
+> lists pending apps and `store update <app> --apply` installs one. The old
+> fire-and-forget `store-update.ps1` (rundll32 + scheduled-task triggers) has
+> been removed; see the "Microsoft Store uses the StoreCLI" note in the top-level
+> `README.md`.
 
 ## `msys-update.ps1` — update an MSYS2 install (`pacman -Syu`)
 
@@ -43,19 +29,14 @@ so pacman gets the right environment (DLLs, `/etc`, its database). Point the
 - **Ends with a "press any key" pause** so you can read the result. It is
   guarded, so a piped or scripted run skips it instead of blocking.
 
-### Wiring them up
+### Wiring it up
 
-Both scripts are `.ps1`, so give each an **interpreter** — that also pins the
-PowerShell version you want:
+Give the script an **interpreter** — that also pins the PowerShell version you
+want:
 
 ```json
 {
   "scripts": [
-    {
-      "name": "StoreUpdates",
-      "path": "C:\\path\\to\\store-update.ps1",
-      "interpreter": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
-    },
     {
       "name": "MSYS2",
       "path": "C:\\path\\to\\msys-update.ps1",
@@ -65,5 +46,5 @@ PowerShell version you want:
 }
 ```
 
-Add these to your config (`%USERPROFILE%\.config\updater\config.json`) and the
-rows appear under **Custom scripts**.
+Add it to your config (`%USERPROFILE%\.config\updater\config.json`) and the row
+appears under **Custom scripts**.

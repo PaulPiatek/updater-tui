@@ -1,8 +1,9 @@
 # updater-tui
 
 An interactive **full-screen terminal updater**. It upgrades **globally installed
-npm packages**, **Windows Package Manager (winget)** packages, **Windows Update**
-software updates, and runs your own **custom update scripts** — all from one
+npm packages**, **Windows Package Manager (winget)** packages, **Microsoft Store
+apps**, **Windows Update** software updates, and runs your own **custom update
+scripts** — all from one
 pane-based UI.
 
 It is a from-scratch rewrite of the retired clack-based
@@ -18,7 +19,8 @@ reference. It is the lean, prompt-driven implementation at
 ╭─ Sources ─────────────╮ ╭─ Output ─────────────────────────────────╮
 │› [x] Global npm packages│ │· Select sources, then Enter to scan.     │
 │  [x] winget            │ │· Checking Global npm packages…           │
-│  [x] Windows Update    │ │✔ winget: 3 update(s)                     │
+│  [x] Store apps        │ │✔ winget: 3 update(s)                     │
+│  [x] Windows Update    │ │✔ store: 1 update(s)                      │
 │  [x] Custom scripts    │ │· Choose packages, then Enter to upgrade. │
 ╰────────────────────────╯ ╰──────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────╮
@@ -50,7 +52,8 @@ selected. Ignored items never appear.
 ## Requirements
 
 - [Bun](https://bun.sh) 1.4+ to run from source.
-- The tools for whichever sources you use: `npm`, `winget`, PowerShell.
+- The tools for whichever sources you use: `npm`, `winget`, PowerShell, and
+  the Windows 11 Store CLI (`store`, shipped with the Microsoft Store app).
 - The standalone `.exe` needs none of these to *run* — only the tools used by the
   sources themselves.
 
@@ -162,8 +165,6 @@ file association). A missing executable is shown locked (`· not found`).
 
 See [`examples/`](examples/) for ready-made scripts and how to wire them up:
 
-- [`store-update.ps1`](examples/store-update.ps1) — triggers Microsoft Store app
-  updates.
 - [`msys-update.ps1`](examples/msys-update.ps1) — updates an MSYS2 install
   (`pacman -Syu`, looping until done).
 
@@ -239,6 +240,7 @@ src/
     index.ts        registry (built-ins + config-driven custom)
     npm.ts          global npm packages
     winget.ts       Windows Package Manager packages
+    store.ts        Microsoft Store apps (via the StoreCLI)
     windows-update.ts  Windows Update (one elevated batch)
     custom.ts       user-defined executables
 scripts/
@@ -265,3 +267,24 @@ PowerShell, not `UsoClient.exe` or `wuauclt`. Both of those are unsupported:
 `87`/`ERROR_INVALID_PARAMETER`. The COM API is the only one that gives what the
 picker needs: a list with titles/KBs/sizes, per-update results, and one elevated
 batch (one UAC prompt). See `AGENTS.md` for the measurements.
+
+### Microsoft Store uses the StoreCLI (`store.exe`)
+
+Windows 11 ships a supported `store` command inside the Microsoft Store app (an
+app-execution alias pointing at `store.exe`). `src/sources/store.ts` uses it
+directly: `store updates` lists pending apps, `store update <app> --apply`
+installs one. This replaces the old fire-and-forget `rundll32`/scheduled-task
+trigger and gives the picker real entries with `current → latest`.
+
+Do not confuse it with
+[`microsoft/msstore-cli`](https://github.com/microsoft/msstore-cli)
+(`msstore.exe`) — that is the Partner Center **publishing** CLI, a different tool
+with no ability to list or update the apps installed on a machine.
+
+The StoreCLI is marked **Preview**, prints an ANSI table on stdout with no
+`--json`, and exits `0` even for an unknown parameter — so the source parses the
+output rather than trusting the exit code. Its table is Name / Publisher /
+Version / Date with **no target-version column**, so rows read
+`1.24.11321.0 → update`. `store updates` also prompts to install; under the
+captured (no-stdin) run it installs nothing, and the source never passes
+`--apply` while listing. See `AGENTS.md`.

@@ -27,6 +27,7 @@ Options:
 Sources:
   npm                  Globally installed npm packages.
   winget               Windows Package Manager packages.
+  store                Microsoft Store apps (Windows 11 StoreCLI).
   windows-update       Pending Windows updates (needs admin to install).
   custom               Scripts defined in the config (shown when configured).
 
