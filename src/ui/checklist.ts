@@ -70,7 +70,13 @@ export class Checklist {
     this.scroll = new ScrollBoxRenderable(renderer, {
       flexGrow: 1,
       scrollY: true,
-      scrollbarOptions: { showArrows: false },
+      scrollbarOptions: {
+        showArrows: false,
+        trackOptions: {
+          backgroundColor: colors.scrollTrack,
+          foregroundColor: colors.scrollThumb,
+        },
+      },
     });
     this.content = new BoxRenderable(renderer, {
       flexDirection: "column",
@@ -249,15 +255,19 @@ export class Checklist {
         return;
       }
       const active = index === this.cursor;
-      const fg = row.locked ? colors.dim : active ? colors.accent : colors.text;
+      const fg = active
+        ? colors.selectionFg
+        : row.locked
+          ? colors.dim
+          : colors.text;
       const { label, hint } = this.fit(row);
       nodes.marker.content = this.markerFor(row, active);
       nodes.marker.fg = fg;
       nodes.label.content = label;
       nodes.label.fg = fg;
       nodes.hint.content = hint ? ` ${hint}` : "";
-      nodes.hint.fg = colors.dim;
-      nodes.line.backgroundColor = active ? colors.selectedBg : undefined;
+      nodes.hint.fg = active ? colors.selectionFg : colors.dim;
+      nodes.line.backgroundColor = active ? colors.selectionBg : undefined;
     });
   }
 }

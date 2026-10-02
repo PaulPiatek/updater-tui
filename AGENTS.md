@@ -323,6 +323,36 @@ twice.
 
 ---
 
+## Colours come from the terminal palette, not from us
+
+`src/ui/theme.ts` maps every semantic colour onto an **ANSI palette slot**
+(`RGBA.fromIndex(0..15)`), so the terminal resolves it against the user's scheme
+and re-theming the terminal recolours the app live. Do not put hex back.
+
+- **Slots 16–255 are not theme colours** — they are the fixed xterm RGB cube and
+  greys.
+- **`RGBA.defaultForeground()` does not work here.** The docs say it emits
+  `SGR 39`; measured against `renderer.currentRenderBuffer` it resolves to the
+  native's built-in white snapshot (`ESC[38;2;255;255;255m`), which would be
+  invisible on a light scheme. Body text is slot 7 instead.
+  `RGBA.defaultBackground()` *is* fine on a background channel (it emits
+  `SGR 49`) and is used for the scroll track.
+- **`createTextAttributes({ reverse: true })` is a trap.** With no background
+  set, OpenTUI packs *both* fg and bg as the text's own colour (measured:
+  `fg=indexed/12 bg=indexed/12 attrs=0x20`), so a "reverse video" highlight
+  renders as solid accent with invisible text. The active row uses an explicit
+  box `backgroundColor` instead.
+
+The caveat of slots 0–15: a scheme defines "white" (7/15) as near-white, so on a
+*light* terminal scheme body text can wash out. That is a limitation of the
+16-colour palette, not a bug — the fix would be `renderer.themeMode` or
+`getPalette()`, both of which are deliberately not used.
+
+`tests/theme.test.ts` guards all of this: it renders the real `Checklist` in the
+in-memory renderer and asserts every non-blank glyph carries a palette intent.
+
+---
+
 ## Rejected: streaming child output into the pane
 
 A feature was built and then reverted: run custom scripts (and npm/winget) on a

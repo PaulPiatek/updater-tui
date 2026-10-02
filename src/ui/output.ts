@@ -9,6 +9,7 @@ import {
   BoxRenderable,
   ScrollBoxRenderable,
   TextRenderable,
+  type RGBA,
   type RenderContext,
 } from "@opentui/core";
 import { colors } from "./theme";
@@ -20,7 +21,7 @@ export interface LogLine {
   text: string;
 }
 
-const levelColor = (level: LogLevel): string => {
+const levelColor = (level: LogLevel): RGBA => {
   switch (level) {
     case "good":
       return colors.good;
@@ -75,7 +76,13 @@ export class OutputPane {
       scrollY: true,
       stickyScroll: true,
       stickyStart: "bottom",
-      scrollbarOptions: { showArrows: false },
+      scrollbarOptions: {
+        showArrows: false,
+        trackOptions: {
+          backgroundColor: colors.scrollTrack,
+          foregroundColor: colors.scrollThumb,
+        },
+      },
     });
     this.content = new BoxRenderable(renderer, {
       flexDirection: "column",
