@@ -3,8 +3,8 @@
  * unit-tested headlessly (see `tests/state.test.ts`).
  *
  * Stage 1 picks sources; stage 2 picks packages. Everything is driven by plain
- * functions over an immutable-ish `FlowState`, which the Solid layer wraps in
- * signals.
+ * functions over an immutable-ish `FlowState`, which the imperative UI layer
+ * (`src/ui/app.ts`) applies and re-renders from.
  */
 import type { Source, UpgradeItem } from "./types";
 
