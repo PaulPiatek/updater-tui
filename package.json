@@ -1,6 +1,6 @@
 {
   "name": "updater-tui",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -11,7 +11,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "icon": "bun run scripts/make-icon.ts",
-    "build:exe": "bun build --compile --outfile=dist/updater-tui.exe --windows-icon=assets/icon.ico --windows-title=updater-tui --windows-publisher=Paul --windows-version=0.1.0.0 --windows-description=\"Interactive updater (TUI) for npm, winget, Windows Update and custom scripts\" ./src/index.ts",
+    "build:exe": "bun build --compile --outfile=dist/updater-tui.exe --windows-icon=assets/icon.ico --windows-title=updater-tui --windows-publisher=Paul --windows-version=1.0.0.0 --windows-description=\"Interactive updater (TUI) for npm, winget, Windows Update and custom scripts\" ./src/index.ts",
     "install": "bun run scripts/install.ts"
   },
   "dependencies": {
