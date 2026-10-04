@@ -39,40 +39,45 @@ Write-Host ""
 $maxPasses = 5
 $pass = 0
 $exit = 0
+$done = $false
 
 while ($pass -lt $maxPasses) {
   $pass++
   Write-Host "--- pass $pass ---"
 
-  # Capture output so we can tell whether pacman actually did anything, while
-  # still printing it live. (Tee-Object -Variable drops the pass-through here.)
-  $lines = [System.Collections.Generic.List[string]]::new()
-  & $bash -lc "cd / && pacman $pacmanArgs" 2>&1 | ForEach-Object {
-    $line = $_.ToString()
-    $lines.Add($line)
-    Write-Host $line
-  }
+  # Run pacman directly on the terminal — never through a PowerShell pipeline.
+  # Piping its output makes stdout a pipe, which block-buffers it and hides
+  # pacman's "[Y/n]" prompt (it has no trailing newline, so the pipeline never
+  # emits it) even though pacman still reads the answer from your keyboard.
+  & $bash -lc "cd / && pacman $pacmanArgs"
   $exit = $LASTEXITCODE
-  $text = ($lines -join "`n")
+
+  # Anything left? The first pass may only update pacman/core and defer the
+  # rest to a second run, so ask pacman what is still upgradable. Check this
+  # *before* the exit code: a core update deliberately terminates MSYS2
+  # processes, which can make that pass exit non-zero even though the update is
+  # progressing fine and simply needs another run to finish.
+  $pending = @(& $bash -lc "pacman -Qu" 2>$null)
+  if ($pending.Count -eq 0) {
+    Write-Host ""
+    Write-Host "MSYS2 is up to date."
+    $done = $true
+    break
+  }
 
   if ($exit -ne 0) {
     Write-Host "!! pacman exited with code $exit"
-    break
+    Write-Host "   $($pending.Count) package(s) still upgradable — running another pass."
   }
 
-  # Nothing left to install → done. pacman says "there is nothing to do".
-  if ($text -match 'there is nothing to do') {
-    Write-Host ""
-    Write-Host "MSYS2 is up to date."
-    break
-  }
-
-  # Otherwise pacman did something; loop again in case a core update was
-  # deferred to the next run.
   Write-Host ""
 }
 
-if ($pass -ge $maxPasses) {
+if ($done) {
+  # Nothing left to upgrade — treat that as success even if the pass that
+  # finished the job exited non-zero because it terminated the MSYS2 session.
+  $exit = 0
+} else {
   Write-Host "Stopped after $maxPasses passes — re-run if pacman still reports updates."
 }
 

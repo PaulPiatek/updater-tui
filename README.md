@@ -167,6 +167,8 @@ See [`examples/`](examples/) for ready-made scripts and how to wire them up:
 
 - [`msys-update.ps1`](examples/msys-update.ps1) — updates an MSYS2 install
   (`pacman -Syu`, looping until done).
+- [`pi-extensions-update.ps1`](examples/pi-extensions-update.ps1) — refreshes the
+  extensions installed into the `pi` coding agent (`pi update --extensions`).
 
 ### Rule syntax
 

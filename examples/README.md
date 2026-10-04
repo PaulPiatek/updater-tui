@@ -21,11 +21,13 @@ so pacman gets the right environment (DLLs, `/etc`, its database). Point the
 `MSYS_ROOT` variable at your install (default `G:\msys64`).
 
 - **Loops until nothing is left to do.** `pacman -Syu` often needs two passes —
-  the first updates pacman/core and tells you to restart the shell. The script
-  repeats until pacman reports "there is nothing to do" (capped at 5 passes).
+  the first updates pacman/core and (by design) terminates the MSYS2 session. The
+  script keeps going while `pacman -Qu` still reports upgradable packages, so a
+  non-zero exit from that terminating pass doesn't stop it (capped at 5 passes).
 - **Interactive** — pacman's prompts reach the real terminal (the updater gives
   scripts the real stdin/stdout). Add `-NoConfirm` via `args` for `--noconfirm`.
-- Output streams live, and the exit code is pacman's.
+- Output streams live, and the exit code is `0` once MSYS2 is fully up to date
+  (an intermediate pass that deliberately closes the session may exit non-zero).
 - **Ends with a "press any key" pause** so you can read the result. It is
   guarded, so a piped or scripted run skips it instead of blocking.
 
@@ -48,3 +50,30 @@ want:
 
 Add it to your config (`%USERPROFILE%\.config\updater\config.json`) and the row
 appears under **Custom scripts**.
+
+## `pi-extensions-update.ps1` — update pi's installed extensions
+
+Runs `pi update --extensions` to refresh the extensions installed into the `pi`
+coding agent. It deliberately does **not** update `pi` itself — that is an npm
+package, upgraded separately through npm.
+
+- **Fails fast** with a clear message and exit `127` when `pi` is not on `PATH`,
+  instead of silently reporting success.
+- Propagates `pi`'s exit code, so the updater's ✔ / ✖ reflects the result.
+- **Ends with a guarded "press any key" pause**, skipped when input is redirected.
+
+### Wiring it up
+
+Same as `msys-update.ps1` — give it an **interpreter**:
+
+```json
+{
+  "scripts": [
+    {
+      "name": "Pi",
+      "path": "C:\\path\\to\\pi-extensions-update.ps1",
+      "interpreter": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+    }
+  ]
+}
+```
