@@ -5,7 +5,7 @@
  * non-interactive modes both drive it, and it reports progress through
  * callbacks so the caller can render however it likes.
  */
-import type { Source, UpgradeItem, UpgradeResult } from "./types";
+import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "./types";
 import { createSources, findSource } from "./sources";
 import { applyConfig, loadConfig } from "./config";
 import type { LoadedConfig } from "./config";
@@ -118,8 +118,9 @@ export async function applyGroup(
   items: UpgradeItem[],
   dryRun: boolean,
   events: EngineEvents = {},
+  extra: Partial<UpgradeOptions> = {},
 ): Promise<UpgradeResult[]> {
-  const opts = { dryRun };
+  const opts: UpgradeOptions = { dryRun, ...extra };
 
   if (source.upgradeBatch) {
     const results = await source.upgradeBatch(items, opts);

@@ -52,6 +52,18 @@ export interface UpgradeResult {
 export interface UpgradeOptions {
   /** When true, report the command without executing it. */
   dryRun: boolean;
+  /**
+   * Host an interactive process *inside the app* (overlay + PTY) instead of
+   * running it directly. Returns the child's exit code once it finishes.
+   *
+   * The app owns the overlay, the pty and the reserved keys; the source still
+   * owns the argv. When this is absent (headless, `--dry-run`, tests) the source
+   * must run the process itself.
+   */
+  hostProcess?: (
+    argv: string[],
+    options: { cwd?: string; title?: string },
+  ) => Promise<number>;
 }
 
 /**

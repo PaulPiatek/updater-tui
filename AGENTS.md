@@ -91,19 +91,34 @@ custom scripts' own `pause`/`input()` — can't read keys.
 `proc.run()` so the console is restored. Verified: `0x1f7` → `0x1f7` even when a
 child leaves it at raw `0x208`.
 
-### 3. Custom scripts inherit the real terminal — solved with suspend/resume
+### 3. Custom scripts run in an embedded terminal overlay
 
-The `custom` source declares `runMode: "stream"`, and `App.runUpgrade` suspends
-the renderer around it: `renderer.suspend()` → run the child with an inherited
-terminal → `renderer.resume()`. The child therefore sees a normal terminal (its
-prompts work) without corrupting the OpenTUI screen.
+The `custom` source declares `runMode: "stream"`. `App.runUpgrade` hosts each
+script in `src/ui/overlay-terminal.ts`: the app raises a bordered overlay, runs
+the child on a `Bun.Terminal` (ConPTY), and wires the two directions —
 
-- Route inherited children through `proc.run(..., { inherit: true })` so the
-  Windows console mode is restored (rule 2).
-- Suspend/resume is verified end to end in `scripts/pty-check.ts`.
+```
+child stdout (pty data) → EmbeddedTerminalRenderable.write()
+your keys (panel onData) → pty.write()
+```
+
+so output streams inside the app and the child's prompts work, without giving up
+the whole screen.
+
+- **All keys go to the child**, so interactive scripts (pacman's `[Y/n]`) work.
+- **Reserved keys:** `Ctrl+Q` / `Esc` kill the child (while it is running) and
+  close the overlay. `Ctrl+C` is *not* reserved — it is forwarded so the script
+  receives the interrupt it expects.
+- The overlay **auto-closes** when the child exits (after a brief `exited N`).
 - **Elevated children cannot be captured or pty-hosted.** `Start-Process -Verb
-  RunAs` opens its own console, so Windows Update keeps the same suspend/resume
-  path and cannot stream (see the rejected-feature note below).
+  RunAs` opens its own console, so Windows Update keeps the old `suspend()` /
+  `resume()` path and cannot stream. The app therefore has **two** presentation
+  modes; that is expected.
+
+The app stays tool-agnostic: it exposes a `hostProcess` capability on
+`UpgradeOptions`, and the source calls it with its own argv. When `hostProcess`
+is absent (headless, `--dry-run`, tests) the source runs the process itself via
+`proc.run(..., { inherit: true })` — see rule 2 for why that matters.
 
 A script does **not** need a trailing `pause` — but it may keep one to let the
 user read the output. Any such pause must be guarded so a piped or scripted run
@@ -353,32 +368,36 @@ in-memory renderer and asserts every non-blank glyph carries a palette intent.
 
 ---
 
-## Rejected: streaming child output into the pane
+## Accepted: embedded terminal overlay for custom scripts
 
-A feature was built and then reverted: run custom scripts (and npm/winget) on a
-pty and render their output live in the right pane via OpenTUI's
-`EmbeddedTerminalRenderable`, instead of suspend/resume.
+Custom scripts are hosted in an overlay on a pty and rendered live via OpenTUI's
+`EmbeddedTerminalRenderable`, instead of suspend/resume taking over the whole
+terminal. See rule 3 for how it works.
 
-What was **proven** before abandoning it:
+It was **built once before and reverted**, and the note that used to live here is
+worth keeping because the cause is now understood:
 
 - `EmbeddedTerminalRenderable` works on Windows x64 — **including inside a
-  compiled exe** — fed by `new Bun.Terminal()`. Output renders, typed keys reach
-  the child, prompts work. (`Bun.spawn(..., { terminal })` is documented
-  POSIX-only, but a `Bun.Terminal` instance works on Windows.)
+  compiled exe** — fed by `Bun.spawn(..., { terminal })` / a `Bun.Terminal`.
+  Output renders, typed keys reach the child, prompts work.
 - **Elevated commands cannot be captured.** `Start-Process -Verb RunAs` opens its
-  own console, so a pty sees nothing. Windows Update must stay on
-  suspend/resume regardless.
+  own console, so a pty sees nothing. Windows Update stays on suspend/resume.
 
-Why it was reverted: inside the running app the streamed child exited
-immediately instead of waiting at its prompt, and the cause was not isolated.
-The same script/argv/cwd/env on the same pty behaved correctly *outside* the app,
-so it is something about the live-renderer context.
+**Why it failed the first time — and the fix.** The streamed child exited
+immediately instead of waiting at its prompt. Cause: when a single keypress both
+*starts* an embedded terminal and *focuses* it, the renderer delivers that same
+key to the just-created renderable — so the upgrade `Enter` leaked into the child
+as `\r` and answered its first prompt. The fix is to create **and** focus the
+panel on the **next tick**, after the triggering key has been dispatched.
+`tests/enter-race.test.ts` locks both halves down: it asserts a synchronous
+create+focus *does* leak (so the mechanism can't silently change) and that the
+deferred pattern does not.
 
-**If you retry this**, build the in-process harness first: a live test renderer +
-the panel + a simulated Enter key, iterated with `bun test`. The PTY-based
-debugging used here took ~30s per run and was the main time sink. Also note the
-app's `keyInput` listeners run *before* the focused renderable — check whether
-the key that starts the upgrade is being delivered into a freshly spawned pty.
+When debugging this class of problem, build the in-process harness first (live
+test renderer + panel + simulated key, iterated with `bun test`); PTY runs are
+~30 s each and were the main time sink. `scripts/tui-terminal-prototype.ts` and
+`scripts/embedded-terminal-probe.ts` are the standalone probes;
+`scripts/overlay-check.ts` drives the real app under a PTY.
 
 ---
 
@@ -400,7 +419,8 @@ Done:
 - [x] Researched OpenTUI, verified it renders on current Windows 11 Pro versions.
 - [x] Layout: left = two-stage selection, right = output, bottom = summary/hints.
 - [x] Ported the flow; `Source`/config/`console-mode.ts` wired in.
-- [x] Script output inside the full-screen app — see rule 3 (suspend/resume).
+- [x] Script output inside the full-screen app — **embedded terminal overlay**,
+  see rule 3 and the "Accepted" note below.
 - [x] Config is **shared** with the old tool (same files, nothing new to decide).
 - [x] `build:exe` + `install` revived (see the imperative-UI note above).
 - [x] Microsoft Store apps as a first-class source via the StoreCLI (`store.exe`)

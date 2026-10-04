@@ -41,6 +41,7 @@ import {
 } from "../state";
 import { Checklist, type ChecklistRow } from "./checklist";
 import { OutputPane } from "./output";
+import { TerminalOverlay } from "./overlay-terminal";
 import { colors, truncate } from "./theme";
 
 export interface AppOptions {
@@ -65,6 +66,8 @@ export class App {
   private busy = false;
   private summary: string | null = null;
   private finished = false;
+  /** The overlay currently hosting a script, if any. */
+  private activeOverlay: TerminalOverlay | null = null;
   /** Resolves when the app tears itself down (quit or finish). */
   private readonly done: Promise<void>;
   private resolveDone!: () => void;
@@ -242,11 +245,16 @@ export class App {
 
     try {
       for (const group of groupBySource(this.engine, chosen)) {
-        // Sources that print to the terminal themselves (custom scripts) need
-        // the real terminal: suspend the TUI, run them, then resume.
+        // Sources that print to the terminal themselves (custom scripts) are
+        // hosted in an overlay on a pty, so their output streams live and their
+        // prompts work without giving up the whole screen.
         const streaming = group.source.runMode === "stream" && !this.options.dryRun;
         this.output.push("step", group.source.title);
-        if (streaming) this.renderer.suspend();
+
+        const hostProcess = streaming
+          ? (argv: string[], opts: { cwd?: string; title?: string }) =>
+              this.hostProcess(argv, opts)
+          : undefined;
 
         try {
           const results = await applyGroup(
@@ -254,6 +262,7 @@ export class App {
             group.items,
             this.options.dryRun,
             { onResult: (result) => this.logResult(result) },
+            { hostProcess },
           );
           for (const result of results) {
             if (result.ok) ok++;
@@ -261,7 +270,7 @@ export class App {
             if (result.rebootRequired) reboot = true;
           }
         } finally {
-          if (streaming) this.renderer.resume();
+          // no-op for non-streaming sources
         }
       }
     } catch (err) {
@@ -277,7 +286,26 @@ export class App {
     const verb = this.options.dryRun ? "would upgrade" : "upgraded";
     this.setSummary(`Done: ${ok} ${verb}, ${failed} failed.`);
     this.busy = false;
-    this.refresh();
+    // The user may have quit (closing the overlay) while the last script ran,
+    // in which case the render tree is gone and must not be touched again.
+    if (!this.finished) this.refresh();
+  }
+
+  /** Hosts one script in a terminal overlay and resolves with its exit code. */
+  private hostProcess(
+    argv: string[],
+    options: { cwd?: string; title?: string },
+  ): Promise<number> {
+    return new Promise<number>((resolve) => {
+      // The overlay calls back when it closes — after the child has exited or
+      // the user pressed a reserved key — so the exit code is final by then.
+      const overlay = new TerminalOverlay(this.renderer, () => {
+        this.activeOverlay = null;
+        resolve(overlay.exitCode);
+      });
+      this.activeOverlay = overlay;
+      void overlay.run(argv, options);
+    });
   }
 
   private logResult(result: UpgradeResult): void {
@@ -389,13 +417,15 @@ export class App {
   // ---------------------------------------------------------------------------
   private setSummary(text: string): void {
     this.summary = text;
-    this.refresh();
+    if (!this.finished) this.refresh();
   }
 
   private quit(code: number): void {
     if (this.finished) return;
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
+    // Kill any hosted script and remove its overlay before the renderer goes.
+    this.activeOverlay?.close();
     this.exitCode = code;
     this.renderer.destroy();
     this.resolveDone();
@@ -409,6 +439,7 @@ export class App {
     if (this.finished) return;
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
+    this.activeOverlay?.close();
     this.resolveDone();
   }
 

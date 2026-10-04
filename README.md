@@ -146,12 +146,13 @@ Add executables to the `scripts` array; each becomes a `Custom scripts` row:
 | `args`        | no       | Arguments passed verbatim (no shell).                            |
 | `cwd`         | no       | Working directory. Defaults to the executable's folder.          |
 
-**Scripts take over the terminal.** When a script runs, the TUI *suspends*,
-the script gets the real stdin/stdout/stderr (so its output streams live and its
-prompts work), then the TUI resumes. Because the terminal stays open for the
-whole run, a script does **not** need a `pause` at the end — but one is fine if
-you want to read the output. If you add one, guard it so a piped or scripted run
-cannot block:
+**Scripts run in an embedded terminal overlay.** When a script runs, the app
+opens an overlay and hosts the script on a pty, rendering its output live
+inside the app. Your keystrokes go to the script, so prompts work; `Ctrl+Q` or
+`Esc` closes the overlay (and stops the script). Because the terminal stays open
+for the whole run, a script does **not** need a `pause` at the end — but one is
+fine if you want to read the output. If you add one, guard it so a piped or
+scripted run cannot block:
 
 ```powershell
 if ($Host.UI.RawUI -and -not [Console]::IsInputRedirected) {
@@ -237,6 +238,7 @@ src/
     app.ts          the TUI: layout, flow, keyboard
     checklist.ts    scrollable multi-select (OpenTUI primitives)
     output.ts       append-only status log pane
+    overlay-terminal.ts  embedded terminal overlay for hosted scripts
     theme.ts        colours and text helpers
   sources/
     index.ts        registry (built-ins + config-driven custom)

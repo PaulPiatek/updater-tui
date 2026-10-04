@@ -78,16 +78,22 @@ export function createCustomSource(scripts: ResolvedScript[]): Source {
       }
 
       try {
-        const result = await run(argv, {
-          cwd: script.cwd,
-          // Scripts get the real terminal so they can print live and prompt.
-          inherit: true,
-        });
+        // In the TUI the app hosts the process in an overlay and owns the pty;
+        // elsewhere (headless, tests) we run it ourselves with the real terminal.
+        const code = runOpts.hostProcess
+          ? await runOpts.hostProcess(argv, { cwd: script.cwd, title: script.name })
+          : (
+              await run(argv, {
+                cwd: script.cwd,
+                // Scripts get the real terminal so they can print live and prompt.
+                inherit: true,
+              })
+            ).code;
         return {
           item,
-          ok: result.code === 0,
+          ok: code === 0,
           command,
-          error: result.code === 0 ? undefined : `exit code ${result.code}`,
+          error: code === 0 ? undefined : `exit code ${code}`,
         };
       } catch (err) {
         return { item, ok: false, command, error: errorMessage(err) };

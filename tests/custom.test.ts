@@ -144,3 +144,49 @@ test("upgrade reports a non-zero exit as a failure", async () => {
   expect(result.ok).toBe(false);
   expect(result.error).toContain("exit code 3");
 });
+
+test("hostProcess is used instead of spawning directly when supplied", async () => {
+  const dir = await tempDir();
+  const path = join(dir, "hosted.cmd");
+  await writeFile(path, "@echo off\nexit /b 0\n");
+
+  const source = createCustomSource([
+    script({ name: "hosted", path, cwd: dir, args: ["--go"] }),
+  ]);
+  const [item] = await source.list();
+
+  const calls: Array<{ argv: string[]; cwd?: string; title?: string }> = [];
+  const result = await source.upgrade(item!, {
+    dryRun: false,
+    hostProcess: async (argv, options) => {
+      calls.push({ argv, cwd: options.cwd, title: options.title });
+      return 0;
+    },
+  });
+
+  // The source still owns the argv; the app only decides how to show it.
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.argv).toEqual([path, "--go"]);
+  expect(calls[0]?.cwd).toBe(dir);
+  expect(calls[0]?.title).toBe("hosted");
+  expect(result.ok).toBe(true);
+});
+
+test("a non-zero hostProcess exit is reported as a failure", async () => {
+  const dir = await tempDir();
+  const path = join(dir, "hosted.cmd");
+  await writeFile(path, "@echo off\nexit /b 0\n");
+
+  const source = createCustomSource([
+    script({ name: "hosted", path, cwd: dir, args: [] }),
+  ]);
+  const [item] = await source.list();
+
+  const result = await source.upgrade(item!, {
+    dryRun: false,
+    hostProcess: async () => 7,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("exit code 7");
+});
