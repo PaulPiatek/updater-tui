@@ -189,7 +189,7 @@ bun run typecheck
 | `typecheck`   | `tsc --noEmit`                 | Strict type check.                                            |
 | `icon`        | `bun run scripts/make-icon.ts` | Regenerate `assets/icon.ico` (drawn in code).                 |
 | `build:exe`   | `bun build --compile …`        | Build `dist/updater-tui.exe`.                                 |
-| `install`     | `bun run scripts/install.ts`   | Copy the exe to `~/.local/bin` (asks; `--yes` skips).         |
+| `install:exe` | `bun run scripts/install.ts`   | Copy the exe to `~/.local/bin` (asks; `--yes` skips).         |
 
 Interactive checks that need a real terminal (not part of `bun test`):
 
@@ -204,7 +204,7 @@ bun run scripts/pty-exe-check.ts   # drives the built exe over a PTY
 
 ```sh
 bun run build:exe    # -> dist/updater-tui.exe (~93 MB)
-bun run install      # -> %USERPROFILE%\.local\bin\updater-tui.exe (asks; --yes skips)
+bun run install:exe  # -> %USERPROFILE%\.local\bin\updater-tui.exe (asks; --yes skips)
 ```
 
 The exe is fully featured: all sources, the TUI, and the elevated Windows Update

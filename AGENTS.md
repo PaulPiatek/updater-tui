@@ -235,10 +235,10 @@ Keep these standards:
 To ship a fresh binary:
 
 ```sh
-bun run build:exe && bun run install
+bun run build:exe && bun run install:exe
 ```
 
-`install` copies `dist/updater-tui.exe` (~93 MB) to
+`install:exe` copies `dist/updater-tui.exe` (~93 MB) to
 `%USERPROFILE%\.local\bin\updater-tui.exe` (already on PATH), asking for
 confirmation; `--yes` skips the prompt. It stages to a `.new` file and renames,
 so re-installing over a running `updater-tui.exe` is safe.
@@ -412,7 +412,7 @@ Done:
   see rule 3 and the "Accepted" note below.
 - [x] Config in `%USERPROFILE%\.config\updater\config.json` (shared by every
   updater install on the machine, so it is configured once).
-- [x] `build:exe` + `install` revived (see the imperative-UI note above).
+- [x] `build:exe` + `install:exe` revived (see the imperative-UI note above).
 - [x] Microsoft Store apps as a first-class source via the StoreCLI (`store.exe`)
   — see rule 5. Parses the real Name/Publisher/Version/Date table; the one gap is
   that the CLI exposes no target version, so items read `current → update`.
