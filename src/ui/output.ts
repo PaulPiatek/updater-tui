@@ -196,6 +196,9 @@ export class OutputPane {
     }
 
     this.statusRows.visible = entries.length > 0;
+    // Size the header to its rows explicitly: adding children after layout does
+    // not remeasure this box, so without this it overlaps the scrollbox.
+    this.statusRows.height = entries.length;
     this.layoutStatus();
   }
 
@@ -237,6 +240,7 @@ export class OutputPane {
     this.rows.clear();
     this.order = [];
     this.statusRows.visible = false;
+    this.statusRows.height = 0;
   }
 
   /** Appends one line to the log. */

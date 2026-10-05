@@ -97,6 +97,32 @@ describe("OutputPane status header", () => {
     }
   });
 
+  test("header does not overlap a log line pushed before the scan", async () => {
+    // Regression: the status box was sized before its rows were added, so it
+    // drew over the log's first line (e.g. "·iSelectUsources…").
+    const ui = await mount(62);
+    try {
+      ui.pane.push("info", "Select sources, then Enter to scan.");
+      await ui.render();
+      ui.pane.showStatus([
+        { id: "npm", title: "Global npm packages" },
+        { id: "winget", title: "Windows Package Manager (winget)" },
+        { id: "store", title: "Microsoft Store apps" },
+        { id: "wu", title: "Windows Update" },
+      ]);
+      await ui.render();
+
+      const frame = ui.frame();
+      // The log line survives intact…
+      expect(frame).toContain("Select sources, then Enter to scan.");
+      // …and no status row interleaves with it.
+      expect(frame).not.toContain("uSelect");
+      expect(frame).not.toContain("SelectUsources");
+    } finally {
+      ui.dispose();
+    }
+  });
+
   test("long labels truncate instead of pushing the status off-row", async () => {
     // A narrow pane, where the label cannot fit alongside the status.
     const ui = await mount(40);
