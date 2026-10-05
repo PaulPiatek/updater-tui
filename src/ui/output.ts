@@ -51,11 +51,50 @@ const levelMark = (level: LogLevel): string => {
   }
 };
 
+/** How a per-source status row is marked. */
+export type StatusState = "pending" | "checking" | "good" | "empty" | "bad";
+
+const statusColor = (state: StatusState): RGBA => {
+  switch (state) {
+    case "good":
+      return colors.good;
+    case "bad":
+      return colors.bad;
+    case "checking":
+      return colors.accent;
+    default:
+      return colors.dim;
+  }
+};
+
+const statusMark = (state: StatusState): string => {
+  switch (state) {
+    case "good":
+      return "✔";
+    case "bad":
+      return "✖";
+    case "checking":
+      return "⠋";
+    case "empty":
+      return "·";
+    default:
+      return " ";
+  }
+};
+
+/** One live status row, updated in place as a source scans. */
+interface StatusRow {
+  label: TextRenderable;
+  value: TextRenderable;
+}
+
 /** An append-only status log rendered into a scrollable pane. */
 export class OutputPane {
   readonly root: BoxRenderable;
   private readonly scroll: ScrollBoxRenderable;
   private readonly content: BoxRenderable;
+  private readonly statusRows: BoxRenderable;
+  private rows = new Map<string, StatusRow>();
   private lines: TextRenderable[] = [];
 
   constructor(
@@ -70,6 +109,15 @@ export class OutputPane {
       title,
       titleAlignment: "left",
     });
+
+    // Live per-source status, pinned above the scrolling log. Hidden until a
+    // scan populates it (see `showStatus`).
+    this.statusRows = new BoxRenderable(renderer, {
+      flexDirection: "column",
+      width: "100%",
+      visible: false,
+    });
+    this.root.add(this.statusRows);
 
     this.scroll = new ScrollBoxRenderable(renderer, {
       flexGrow: 1,
@@ -92,6 +140,63 @@ export class OutputPane {
     this.root.add(this.scroll);
   }
 
+  /**
+   * Shows a live status row per source (keyed by id), all starting "pending".
+   * Replaces any rows from a previous scan.
+   */
+  showStatus(entries: Array<{ id: string; title: string }>): void {
+    for (const row of this.rows.values()) {
+      row.label.destroyRecursively();
+      row.value.destroyRecursively();
+    }
+    this.rows.clear();
+
+    for (const entry of entries) {
+      const line = new BoxRenderable(this.renderer, {
+        flexDirection: "row",
+        width: "100%",
+        height: 1,
+      });
+      const label = new TextRenderable(this.renderer, {
+        content: entry.title,
+        fg: colors.muted,
+        wrapMode: "none",
+        flexShrink: 1,
+      });
+      const value = new TextRenderable(this.renderer, {
+        content: "checking…",
+        fg: colors.dim,
+        wrapMode: "none",
+        flexShrink: 0,
+      });
+      line.add(label);
+      line.add(new BoxRenderable(this.renderer, { flexGrow: 1 }));
+      line.add(value);
+      this.statusRows.add(line);
+      this.rows.set(entry.id, { label, value });
+    }
+
+    this.statusRows.visible = entries.length > 0;
+  }
+
+  /** Updates one source's status row. No-op if the row is unknown. */
+  setStatus(id: string, state: StatusState, text: string): void {
+    const row = this.rows.get(id);
+    if (!row) return;
+    row.value.content = `${statusMark(state)} ${text}`;
+    row.value.fg = statusColor(state);
+  }
+
+  /** Hides and clears the status header (e.g. when starting to upgrade). */
+  clearStatus(): void {
+    for (const row of this.rows.values()) {
+      row.label.destroyRecursively();
+      row.value.destroyRecursively();
+    }
+    this.rows.clear();
+    this.statusRows.visible = false;
+  }
+
   /** Appends one line to the log. */
   push(level: LogLevel, text: string): void {
     const line = new TextRenderable(this.renderer, {
@@ -105,6 +210,7 @@ export class OutputPane {
 
   /** Removes every line (used when restarting the flow). */
   clear(): void {
+    this.clearStatus();
     for (const line of this.lines) line.destroyRecursively();
     this.lines = [];
   }

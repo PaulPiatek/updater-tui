@@ -183,20 +183,26 @@ export class App {
 
     this.busy = true;
     this.state = beginScan(current);
+    // A live status row per selected source, filled in as each scan settles.
+    const chosen = this.engine.sources.filter((entry) =>
+      current.selectedSources.has(entry.source.id),
+    );
+    this.output.showStatus(
+      chosen.map((entry) => ({ id: entry.source.id, title: entry.source.title })),
+    );
     this.output.push("step", "Scanning selected sources…");
     this.refresh();
 
     try {
       const result = await scan(this.engine, [...current.selectedSources], {
+        onScanStart: (source) => this.output.setStatus(source.id, "checking", "checking…"),
         onScanDone: (source, items) =>
-          this.output.push(
-            items.length > 0 ? "good" : "info",
-            items.length > 0
-              ? `${source.title}: ${items.length} update(s)`
-              : `${source.title}: up to date`,
+          this.output.setStatus(
+            source.id,
+            items.length > 0 ? "good" : "empty",
+            items.length > 0 ? `${items.length} update(s)` : "up to date",
           ),
-        onScanError: (source, detail) =>
-          this.output.push("bad", `${source.title}: ${detail}`),
+        onScanError: (source, detail) => this.output.setStatus(source.id, "bad", detail),
       });
       this.state = applyScanResults(this.state, result.items, result.errors);
 
@@ -237,6 +243,7 @@ export class App {
 
     this.busy = true;
     this.state = { ...current, stage: "applying" };
+    this.output.clearStatus();
     this.refresh();
 
     let ok = 0;
