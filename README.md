@@ -3,15 +3,8 @@
 An interactive **full-screen terminal updater**. It upgrades **globally installed
 npm packages**, **Windows Package Manager (winget)** packages, **Microsoft Store
 apps**, **Windows Update** software updates, and runs your own **custom update
-scripts** — all from one
-pane-based UI.
-
-It is a from-scratch rewrite of the retired clack-based
-[`updater`](https://github.com/PaulPiatek/updater): same job, same sources and
-config, but the terminal UI is now [OpenTUI](https://opentui.com) (the library
-`opencode` uses). This project supersedes it — the original is kept only for
-reference. It is the lean, prompt-driven implementation at
-[PaulPiatek/updater](https://github.com/PaulPiatek/updater).
+scripts** — all from one pane-based UI, built with
+[OpenTUI](https://opentui.com) (the library `opencode` uses).
 
 ## The UI
 
@@ -99,7 +92,7 @@ and neither flag, the app prints a clear message and exits `2` instead of hangin
 
 ## Configuration
 
-The config is **shared with the old tool** — nothing new to set up:
+The config is auto-created on first run — nothing to set up:
 
 | Path                                        | Scope                            |
 | ------------------------------------------- | -------------------------------- |
@@ -257,10 +250,10 @@ assets/
 tests/              bun:test unit + frame tests
 ```
 
-Adding a source is unchanged from the old tool: implement `Source` in
-`src/sources/` and register it in `src/sources/index.ts`. The engine, TUI,
-`--json`, `--dry-run` and `--yes` all pick it up automatically. Sources stay
-self-contained adapters — the app knows nothing tool-specific.
+Adding a source: implement `Source` in `src/sources/` and register it in
+`src/sources/index.ts`. The engine, TUI, `--json`, `--dry-run` and `--yes` all
+pick it up automatically. Sources stay self-contained adapters — the app knows
+nothing tool-specific.
 
 ### Windows Update uses the WUA COM API
 

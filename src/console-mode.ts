@@ -3,7 +3,7 @@ import { dlopen, FFIType } from "bun:ffi";
 /**
  * Windows console-mode helpers.
  *
- * clack leaves the console in raw input mode, and Bun's `setRawMode(false)`
+ * A prompt UI leaves the console in raw input mode, and Bun's `setRawMode(false)`
  * does NOT restore the original mode — it lands on a different value (0x7),
  * losing flags the console had before. An elevated child (UAC) makes it worse.
  * So instead of guessing, we snapshot the real mode and put it back exactly.
