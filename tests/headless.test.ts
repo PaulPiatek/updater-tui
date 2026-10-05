@@ -8,7 +8,7 @@ import { join } from "node:path";
 // only the `custom` source is targeted (its items come from a temp config).
 mock.module("../src/proc", () => ({
   run: async () => ({ code: 0, stdout: "", stderr: "" }),
-  which: (command: string, fallback: string) => fallback,
+  which: (_command: string, fallback: string) => fallback,
 }));
 
 const { runHeadless } = await import("../src/headless");

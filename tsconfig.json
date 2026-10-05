@@ -4,6 +4,7 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "moduleDetection": "force",
     "types": ["bun"],
     "strict": true,
     "skipLibCheck": true,
@@ -12,6 +13,11 @@
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "forceConsistentCasingInFileNames": true
   },
   "include": ["src", "tests", "scripts"]

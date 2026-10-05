@@ -14,7 +14,7 @@ import {
   type CliRenderer,
   type KeyEvent,
 } from "@opentui/core";
-import type { Source, UpgradeItem, UpgradeResult } from "../types";
+import type { UpgradeResult } from "../types";
 import {
   applyGroup,
   discover,
@@ -28,7 +28,6 @@ import {
   clampIndex,
   defaultSelection,
   flatten,
-  groupItems,
   initialFlow,
   isLocked,
   lockedHint,

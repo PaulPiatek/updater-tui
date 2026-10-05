@@ -5,7 +5,7 @@ import type { Source, UpgradeItem } from "../src/types";
 // so any accidental spawn is inert, and the sources below are hand-written.
 mock.module("../src/proc", () => ({
   run: async () => ({ code: 0, stdout: "", stderr: "" }),
-  which: (command: string, fallback: string) => fallback,
+  which: (_command: string, fallback: string) => fallback,
 }));
 
 const { applyGroup, discover, groupBySource, scan } = await import("../src/engine");
