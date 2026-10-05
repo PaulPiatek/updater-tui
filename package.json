@@ -15,7 +15,7 @@
     "install:exe": "bun run scripts/install.ts"
   },
   "dependencies": {
-    "@opentui/core": "0.5.12"
+    "@opentui/core": "0.5.14"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",
