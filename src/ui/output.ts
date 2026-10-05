@@ -7,12 +7,13 @@
  */
 import {
   BoxRenderable,
+  LayoutEvents,
   ScrollBoxRenderable,
   TextRenderable,
   type RGBA,
   type RenderContext,
 } from "@opentui/core";
-import { colors } from "./theme";
+import { colors, truncate } from "./theme";
 
 export type LogLevel = "info" | "good" | "bad" | "warn" | "step";
 
@@ -86,6 +87,8 @@ const statusMark = (state: StatusState): string => {
 interface StatusRow {
   label: TextRenderable;
   value: TextRenderable;
+  labelText: string;
+  valueText: string;
 }
 
 /** An append-only status log rendered into a scrollable pane. */
@@ -95,6 +98,7 @@ export class OutputPane {
   private readonly content: BoxRenderable;
   private readonly statusRows: BoxRenderable;
   private rows = new Map<string, StatusRow>();
+  private order: string[] = [];
   private lines: TextRenderable[] = [];
 
   constructor(
@@ -138,6 +142,9 @@ export class OutputPane {
     });
     this.scroll.add(this.content);
     this.root.add(this.scroll);
+
+    // The label/value split depends on the pane width, so re-fit on resize.
+    this.root.on(LayoutEvents.RESIZED, () => this.layoutStatus());
   }
 
   /**
@@ -150,6 +157,8 @@ export class OutputPane {
       row.value.destroyRecursively();
     }
     this.rows.clear();
+    this.order = [];
+    this.rows.clear();
 
     for (const entry of entries) {
       const line = new BoxRenderable(this.renderer, {
@@ -161,30 +170,62 @@ export class OutputPane {
         content: entry.title,
         fg: colors.muted,
         wrapMode: "none",
-        flexShrink: 1,
+        height: 1,
+        flexGrow: 0,
+        flexShrink: 0,
       });
       const value = new TextRenderable(this.renderer, {
         content: "checking…",
         fg: colors.dim,
         wrapMode: "none",
+        height: 1,
+        flexGrow: 0,
         flexShrink: 0,
       });
       line.add(label);
-      line.add(new BoxRenderable(this.renderer, { flexGrow: 1 }));
+      line.add(new BoxRenderable(this.renderer, { flexGrow: 1, height: 1 }));
       line.add(value);
       this.statusRows.add(line);
-      this.rows.set(entry.id, { label, value });
+      this.order.push(entry.id);
+      this.rows.set(entry.id, {
+        label,
+        value,
+        labelText: entry.title,
+        valueText: "checking…",
+      });
     }
 
     this.statusRows.visible = entries.length > 0;
+    this.layoutStatus();
   }
 
   /** Updates one source's status row. No-op if the row is unknown. */
   setStatus(id: string, state: StatusState, text: string): void {
     const row = this.rows.get(id);
     if (!row) return;
-    row.value.content = `${statusMark(state)} ${text}`;
+    row.valueText = `${statusMark(state)} ${text}`;
     row.value.fg = statusColor(state);
+    this.layoutStatus();
+  }
+
+  /**
+   * Fits each row into the pane: the status text keeps its full width and the
+   * label absorbs the remainder, truncated so the two never overlap.
+   */
+  private layoutStatus(): void {
+    // `width` is 0 before the first layout pass; fall back to a sane guess.
+    const width = this.root.width > 0 ? this.root.width : 40;
+    // Border (2) + a little padding each side.
+    const available = Math.max(12, width - 6);
+
+    for (const id of this.order) {
+      const row = this.rows.get(id);
+      if (!row) continue;
+      const value = row.valueText;
+      const labelWidth = Math.max(4, available - value.length);
+      row.label.content = truncate(row.labelText, labelWidth);
+      row.value.content = value;
+    }
   }
 
   /** Hides and clears the status header (e.g. when starting to upgrade). */
@@ -194,6 +235,7 @@ export class OutputPane {
       row.value.destroyRecursively();
     }
     this.rows.clear();
+    this.order = [];
     this.statusRows.visible = false;
   }
 

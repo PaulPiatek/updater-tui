@@ -7,13 +7,13 @@ import { BoxRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { OutputPane } from "../src/ui/output";
 
-async function mount(): Promise<{
+async function mount(width = 60): Promise<{
   pane: OutputPane;
   frame: () => string;
   render: () => Promise<unknown>;
   dispose: () => void;
 }> {
-  const setup = await createTestRenderer({ width: 60, height: 14 });
+  const setup = await createTestRenderer({ width, height: 14 });
   const root = new BoxRenderable(setup.renderer, {
     flexDirection: "column",
     width: "100%",
@@ -96,4 +96,30 @@ describe("OutputPane status header", () => {
       ui.dispose();
     }
   });
+
+  test("long labels truncate instead of pushing the status off-row", async () => {
+    // A narrow pane, where the label cannot fit alongside the status.
+    const ui = await mount(40);
+    try {
+      ui.pane.showStatus([
+        { id: "winget", title: "Windows Package Manager (winget)" },
+      ]);
+      ui.pane.setStatus("winget", "good", "1 update(s)");
+      await ui.render();
+
+      const row = ui
+        .frame()
+        .split("\n")
+        .find((line) => line.includes("update(s)"));
+      // The label and its status share one line; the label is ellipsised, so
+      // "winget)" never survives and the status keeps its full text.
+      expect(row).toBeDefined();
+      expect(row).toContain("…");
+      expect(row).toContain("update(s)");
+      expect(row).not.toContain("(winget)");
+    } finally {
+      ui.dispose();
+    }
+  });
 });
+
