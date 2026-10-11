@@ -27,7 +27,10 @@ async function mount(width = 60): Promise<{
     pane,
     frame: () => setup.captureCharFrame(),
     render: () => setup.renderOnce(),
-    dispose: () => setup.renderer.destroy(),
+    dispose: () => {
+      pane.dispose();
+      setup.renderer.destroy();
+    },
   };
 }
 
@@ -64,6 +67,35 @@ describe("OutputPane status header", () => {
       expect(frame).toContain("· up to date");
       // The other row is updated too, not appended as a new line.
       expect(frame.match(/winget/g)?.length).toBe(1);
+    } finally {
+      ui.dispose();
+    }
+  });
+
+  test("animates the spinner while a source is still checking", async () => {
+    const ui = await mount();
+    try {
+      ui.pane.showStatus([{ id: "npm", title: "Global npm packages" }]);
+      await ui.render();
+      const first = ui.frame().match(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)?.[0];
+
+      // The spinner advances on its own timer, so a later frame differs.
+      await Bun.sleep(100);
+      await ui.render();
+      const later = ui.frame().match(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)?.[0];
+
+      expect(first).toBeDefined();
+      expect(later).toBeDefined();
+      expect(later).not.toBe(first);
+      expect(ui.frame()).toContain("checking…");
+
+      // Once nothing is checking, the timer stops: the frame is stable.
+      ui.pane.setStatus("npm", "good", "3 update(s)");
+      await ui.render();
+      const settled = ui.frame();
+      await Bun.sleep(100);
+      await ui.render();
+      expect(ui.frame()).toBe(settled);
     } finally {
       ui.dispose();
     }

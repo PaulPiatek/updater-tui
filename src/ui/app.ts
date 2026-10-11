@@ -432,6 +432,7 @@ export class App {
     this.renderer.keyInput.off("keypress", this.onKey);
     // Kill any hosted script and remove its overlay before the renderer goes.
     this.activeOverlay?.close();
+    this.output.dispose();
     this.exitCode = code;
     this.renderer.destroy();
     this.resolveDone();
@@ -446,6 +447,7 @@ export class App {
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
     this.activeOverlay?.close();
+    this.output.dispose();
     this.resolveDone();
   }
 

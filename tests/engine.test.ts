@@ -186,4 +186,47 @@ describe("scan", () => {
     await scan(engine, ["wanted", "unavailable"]);
     expect(listed).toEqual(["wanted"]);
   });
+
+  test("reports each source as it settles, not all at the end", async () => {
+    // Regression: the UI fills status rows in live, so a fast source must be
+    // reported while a slow one is still scanning.
+    const done: string[] = [];
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+
+    const engine = {
+      config: { ignore: [], pin: [], scripts: [], files: [], errors: [], userPath: "", projectPath: null } as never,
+      sources: [
+        {
+          source: fakeSource({ id: "fast", list: async () => [item({ id: "fast:1", source: "fast" })] }),
+          available: true,
+        },
+        {
+          source: fakeSource({
+            id: "slow",
+            list: async () => {
+              await slowGate;
+              return [];
+            },
+          }),
+          available: true,
+        },
+      ],
+    };
+
+    const scanning = scan(engine, ["fast", "slow"], {
+      onScanDone: (source) => done.push(source.id),
+    });
+
+    // The fast source settles (and its onScanDone fires) before the slow one
+    // is allowed to finish.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toEqual(["fast"]);
+
+    releaseSlow();
+    await scanning;
+    expect(done).toEqual(["fast", "slow"]);
+  });
 });

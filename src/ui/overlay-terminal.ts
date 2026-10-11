@@ -39,6 +39,7 @@ export interface HostProcessOptions {
 export class TerminalOverlay {
   private readonly backdrop: BoxRenderable;
   private readonly frame: BoxRenderable;
+  private readonly body: BoxRenderable;
   private readonly header: TextRenderable;
   private readonly footer: TextRenderable;
   private panel: EmbeddedTerminalRenderable | null = null;
@@ -51,13 +52,13 @@ export class TerminalOverlay {
     private readonly renderer: CliRenderer,
     private readonly onClose: () => void,
   ) {
-    // A full-screen backdrop so the app behind doesn't bleed through, padded to
-    // centre the frame.
+    // A full-screen backdrop so the app behind doesn't bleed through. No inset:
+    // the frame should use every available row and column (the pty is sized to
+    // the panel, so padding here directly shrinks the child terminal).
     this.backdrop = new BoxRenderable(renderer, {
       flexDirection: "column",
       width: "100%",
       height: "100%",
-      padding: 1,
     });
 
     this.frame = new BoxRenderable(renderer, {
@@ -66,6 +67,16 @@ export class TerminalOverlay {
       height: "100%",
       borderStyle: "rounded",
       borderColor: colors.accent,
+    });
+
+    // Header, then the close hint (directly under the title, as before), then a
+    // body that holds the terminal (added in `run`). The body flexes to fill
+    // whatever height is left.
+    this.body = new BoxRenderable(renderer, {
+      flexDirection: "column",
+      flexGrow: 1,
+      flexBasis: 0,
+      width: "100%",
     });
 
     this.header = new TextRenderable(renderer, {
@@ -88,17 +99,9 @@ export class TerminalOverlay {
     });
     headerRow.add(this.header);
 
-    const footerRow = new BoxRenderable(renderer, {
-      flexDirection: "row",
-      width: "100%",
-      height: 1,
-      paddingLeft: 1,
-      paddingRight: 1,
-    });
-    footerRow.add(this.footer);
-
     this.frame.add(headerRow);
     this.frame.add(this.footer);
+    this.frame.add(this.body);
     this.backdrop.add(this.frame);
 
     // Keep the child pty at the panel's real size (initial + every resize).
@@ -136,7 +139,7 @@ export class TerminalOverlay {
       // The panel resizes with the overlay; keep the child pty the same size.
       onTerminalResize: (cols, rows) => this.proc?.terminal?.resize(cols, rows),
     });
-    this.frame.add(this.panel);
+    this.body.add(this.panel);
 
     const proc = Bun.spawn(argv, {
       cwd: options.cwd,

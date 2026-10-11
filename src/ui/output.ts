@@ -55,6 +55,11 @@ const levelMark = (level: LogLevel): string => {
 /** How a per-source status row is marked. */
 export type StatusState = "pending" | "checking" | "good" | "empty" | "bad";
 
+/** Braille spinner glyphs, advanced while a source is still scanning. */
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/** ~12 fps: lively without repainting the pane on every render frame. */
+const SPINNER_INTERVAL_MS = 80;
+
 const statusColor = (state: StatusState): RGBA => {
   switch (state) {
     case "good":
@@ -75,7 +80,7 @@ const statusMark = (state: StatusState): string => {
     case "bad":
       return "✖";
     case "checking":
-      return "⠋";
+      return SPINNER_FRAMES[0]!;
     case "empty":
       return "·";
     default:
@@ -89,6 +94,7 @@ interface StatusRow {
   value: TextRenderable;
   labelText: string;
   valueText: string;
+  state: StatusState;
 }
 
 /** An append-only status log rendered into a scrollable pane. */
@@ -100,6 +106,8 @@ export class OutputPane {
   private rows = new Map<string, StatusRow>();
   private order: string[] = [];
   private lines: TextRenderable[] = [];
+  private spinnerFrame = 0;
+  private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly renderer: RenderContext,
@@ -148,7 +156,7 @@ export class OutputPane {
   }
 
   /**
-   * Shows a live status row per source (keyed by id), all starting "pending".
+   * Shows a live status row per source (keyed by id), all starting "checking".
    * Replaces any rows from a previous scan.
    */
   showStatus(entries: Array<{ id: string; title: string }>): void {
@@ -175,7 +183,7 @@ export class OutputPane {
         flexShrink: 0,
       });
       const value = new TextRenderable(this.renderer, {
-        content: "checking…",
+        content: `${SPINNER_FRAMES[0]} checking…`,
         fg: colors.dim,
         wrapMode: "none",
         height: 1,
@@ -192,6 +200,7 @@ export class OutputPane {
         value,
         labelText: entry.title,
         valueText: "checking…",
+        state: "checking",
       });
     }
 
@@ -200,15 +209,19 @@ export class OutputPane {
     // not remeasure this box, so without this it overlaps the scrollbox.
     this.statusRows.height = entries.length;
     this.layoutStatus();
+    this.startSpinner();
   }
 
   /** Updates one source's status row. No-op if the row is unknown. */
   setStatus(id: string, state: StatusState, text: string): void {
     const row = this.rows.get(id);
     if (!row) return;
-    row.valueText = `${statusMark(state)} ${text}`;
+    row.state = state;
+    row.valueText = text;
     row.value.fg = statusColor(state);
     this.layoutStatus();
+    if (state === "checking") this.startSpinner();
+    else this.stopSpinnerIfIdle();
   }
 
   /**
@@ -224,15 +237,47 @@ export class OutputPane {
     for (const id of this.order) {
       const row = this.rows.get(id);
       if (!row) continue;
-      const value = row.valueText;
+      const mark =
+        row.state === "checking"
+          ? SPINNER_FRAMES[this.spinnerFrame]!
+          : statusMark(row.state);
+      const value = `${mark} ${row.valueText}`;
       const labelWidth = Math.max(4, available - value.length);
       row.label.content = truncate(row.labelText, labelWidth);
       row.value.content = value;
     }
   }
 
+  /**
+   * Advances the spinner while any row is still scanning. Started by
+   * `showStatus`/`setStatus` and stopped as soon as no row is `checking`, so a
+   * finished scan leaves no timer behind.
+   */
+  private startSpinner(): void {
+    if (this.spinnerTimer !== null) return;
+    this.spinnerTimer = setInterval(() => {
+      this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
+      this.layoutStatus();
+    }, SPINNER_INTERVAL_MS);
+  }
+
+  private stopSpinner(): void {
+    if (this.spinnerTimer === null) return;
+    clearInterval(this.spinnerTimer);
+    this.spinnerTimer = null;
+  }
+
+  private stopSpinnerIfIdle(): void {
+    for (const row of this.rows.values()) {
+      if (row.state === "checking") return;
+    }
+    this.stopSpinner();
+  }
+
   /** Hides and clears the status header (e.g. when starting to upgrade). */
   clearStatus(): void {
+    this.stopSpinner();
+    this.spinnerFrame = 0;
     for (const row of this.rows.values()) {
       row.label.destroyRecursively();
       row.value.destroyRecursively();
@@ -241,6 +286,11 @@ export class OutputPane {
     this.order = [];
     this.statusRows.visible = false;
     this.statusRows.height = 0;
+  }
+
+  /** Stops the spinner timer; call when tearing the UI down. */
+  dispose(): void {
+    this.stopSpinner();
   }
 
   /** Appends one line to the log. */

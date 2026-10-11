@@ -90,23 +90,26 @@ export async function scan(
 
   for (const entry of chosen) events.onScanStart?.(entry.source);
 
-  const settled = await Promise.allSettled(
-    chosen.map((entry) => entry.source.list()),
-  );
-
   const raw: UpgradeItem[] = [];
   const errors: string[] = [];
-  settled.forEach((outcome, index) => {
-    const source = chosen[index]!.source;
-    if (outcome.status === "fulfilled") {
-      raw.push(...outcome.value);
-      events.onScanDone?.(source, outcome.value);
-    } else {
-      const detail = message(outcome.reason);
-      errors.push(`${source.title}: ${detail}`);
-      events.onScanError?.(source, detail);
-    }
-  });
+
+  // One promise per source, each reporting its own outcome the moment it
+  // settles — not after all of them do — so the UI can fill in rows live as
+  // slower sources (Windows Update, Store) are still running.
+  await Promise.all(
+    chosen.map(async (entry) => {
+      const source = entry.source;
+      try {
+        const items = await source.list();
+        raw.push(...items);
+        events.onScanDone?.(source, items);
+      } catch (err) {
+        const detail = message(err);
+        errors.push(`${source.title}: ${detail}`);
+        events.onScanError?.(source, detail);
+      }
+    }),
+  );
 
   const { kept, ignored, pinned } = applyConfig(raw, engine.config);
   return { items: kept, ignored, pinned, errors };
