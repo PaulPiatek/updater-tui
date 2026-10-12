@@ -74,6 +74,18 @@ describe("theme colours", () => {
     setup.renderer.destroy();
   });
 
+  test("the theme itself is palette slots 0-15, never a literal RGB", () => {
+    // Guards against a hex being added to `colors` (a background swatch would
+    // otherwise go untested, since OpenTUI reports *default* backgrounds as
+    // `rgb` intent).
+    for (const [name, color] of Object.entries(colors)) {
+      if (color.intent === "default") continue; // scrollTrack: SGR 49
+      expect({ name, intent: color.intent }).toEqual({ name, intent: "indexed" });
+      expect(color.slot).toBeGreaterThanOrEqual(0);
+      expect(color.slot).toBeLessThanOrEqual(15);
+    }
+  });
+
   test("the active row is an accent bar, not a fixed background swatch", async () => {
     const setup = await render();
     const active = setup

@@ -33,6 +33,14 @@ function argvFor(script: ResolvedScript): string[] {
  * failing at run time.
  */
 export function createCustomSource(scripts: ResolvedScript[]): Source {
+  // Two scripts can share a display name (the same file name in different
+  // directories); disambiguate only those, so the common `custom:<name>` id is
+  // left unchanged.
+  const nameCounts = new Map<string, number>();
+  for (const script of scripts) {
+    nameCounts.set(script.name, (nameCounts.get(script.name) ?? 0) + 1);
+  }
+
   return {
     id: "custom",
     title: "Custom scripts",
@@ -44,14 +52,23 @@ export function createCustomSource(scripts: ResolvedScript[]): Source {
 
     async list(): Promise<UpgradeItem[]> {
       const items: UpgradeItem[] = [];
+      const seen = new Map<string, number>();
       for (const script of scripts) {
         // Both the script and, if configured, its interpreter must exist.
         const exists =
           (await Bun.file(script.path).exists()) &&
           (script.interpreter === undefined ||
             (await Bun.file(script.interpreter).exists()));
+
+        let id = `custom:${script.name}`;
+        if ((nameCounts.get(script.name) ?? 1) > 1) {
+          const ordinal = (seen.get(script.name) ?? 0) + 1;
+          seen.set(script.name, ordinal);
+          id = `custom:${script.name}#${ordinal}`;
+        }
+
         items.push({
-          id: `custom:${script.name}`,
+          id,
           source: "custom",
           name: script.name,
           current: "script",
@@ -85,8 +102,10 @@ export function createCustomSource(scripts: ResolvedScript[]): Source {
           : (
               await run(argv, {
                 cwd: script.cwd,
-                // Scripts get the real terminal so they can print live and prompt.
-                inherit: true,
+                // Give the script the real terminal so it can print live and
+                // prompt — but only when there is one. Under a pipe (a `--yes`
+                // run in CI) capture instead, so a prompt can't block the run.
+                inherit: process.stdin.isTTY === true,
               })
             ).code;
         return {

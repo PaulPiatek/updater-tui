@@ -11,7 +11,7 @@
  * Usage:
  *   bun run scripts/tui-terminal-prototype.ts
  *   bun run scripts/tui-terminal-prototype.ts -- pwsh -NoLogo
- *   bun run scripts/tui-terminal-prototype.ts -- pwsh -File "C:\Users\Paul\.config\updater\msys-update.ps1"
+ *   bun run scripts/tui-terminal-prototype.ts -- pwsh -File "%USERPROFILE%\.config\updater\msys-update.ps1"
  *
  * Keys: everything goes to the child, except Ctrl+Q which closes the prototype.
  */

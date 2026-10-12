@@ -10,6 +10,15 @@ interface NpmOutdatedEntry {
   location?: string;
 }
 
+/** Pulls npm's human-readable message out of a JSON error object. */
+function npmErrorDetail(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const record = error as Record<string, unknown>;
+  const summary = typeof record.summary === "string" ? record.summary : undefined;
+  const detail = typeof record.detail === "string" ? record.detail : undefined;
+  return summary ?? detail;
+}
+
 /**
  * Upgrades globally installed npm packages.
  *
@@ -42,25 +51,38 @@ export const npmSource: Source = {
       return [];
     }
 
-    let data: Record<string, NpmOutdatedEntry>;
+    let parsed: unknown;
     try {
-      data = JSON.parse(text) as Record<string, NpmOutdatedEntry>;
+      parsed = JSON.parse(text);
     } catch {
       return [];
     }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    const record = parsed as Record<string, unknown>;
 
-    return Object.entries(data).map(([name, info]) => {
-      const current = info.current ?? "unknown";
-      const latest = info.latest ?? info.wanted ?? "unknown";
-      return {
-        id: `npm:${name}`,
-        source: "npm",
-        name,
-        current,
-        latest,
-        meta: info.location ? { location: info.location } : undefined,
-      } satisfies UpgradeItem;
-    });
+    // npm prints its failures as a JSON object on **stdout** too (still exit 1),
+    // e.g. `{"error":{"code":"ECONNREFUSED","summary":"FetchError: ..."}}`. That
+    // is not a package list — surfacing it avoids listing a bogus "error"
+    // package that `upgrade` would then try to `npm install -g`.
+    if (record.error !== undefined) {
+      throw new Error(npmErrorDetail(record.error) ?? "npm outdated failed");
+    }
+
+    const data = record as Record<string, NpmOutdatedEntry>;
+    return Object.entries(data)
+      .filter(([, info]) => Boolean(info?.current || info?.latest || info?.wanted))
+      .map(([name, info]) => {
+        const current = info.current ?? "unknown";
+        const latest = info.latest ?? info.wanted ?? "unknown";
+        return {
+          id: `npm:${name}`,
+          source: "npm",
+          name,
+          current,
+          latest,
+          meta: info.location ? { location: info.location } : undefined,
+        } satisfies UpgradeItem;
+      });
   },
 
   async upgrade(item, opts: UpgradeOptions): Promise<UpgradeResult> {

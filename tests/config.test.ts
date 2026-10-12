@@ -51,6 +51,16 @@ test("matching is case-insensitive and supports ?", () => {
   expect(matchesRule("npm:foo?ar", npmItem("foobar"))).toBe(true);
 });
 
+test("an empty source-prefixed rule matches everything in that source", () => {
+  expect(matchesRule("npm:", npmItem("anything"))).toBe(true);
+  expect(matchesRule("npm:", wingetItem("Ubuntu"))).toBe(false);
+});
+
+test("an empty bare rule matches nothing", () => {
+  // `{"ignore": [""]}` must not hide every package.
+  expect(matchesRule("", npmItem("anything"))).toBe(false);
+});
+
 test("applyConfig ignores, pins, and lets ignore win over pin", () => {
   const items = [
     npmItem("keep-me"),
@@ -170,6 +180,20 @@ test("a missing scripts key yields an empty list", async () => {
   await writeFile(user, JSON.stringify({ ignore: [], pin: [] }));
   const config = await loadConfigFiles({ user, project: join(dir, "x.json") });
   expect(config.scripts).toEqual([]);
+});
+
+test("user scripts resolve against the user file even when a project file exists", async () => {
+  const dir = await tempDir();
+  const user = join(dir, "user.json");
+  const project = join(dir, "project.json");
+  await writeFile(user, JSON.stringify({ scripts: [{ path: "scripts\\mine.ps1" }] }));
+  // The project file exists but has no `scripts` key, so the user scripts win —
+  // and must resolve against the user file's directory, not the project's.
+  await writeFile(project, JSON.stringify({ ignore: ["npm:a"] }));
+
+  const config = await loadConfigFiles({ user, project });
+  expect(config.scripts).toHaveLength(1);
+  expect(config.scripts[0]?.path).toBe(join(dir, "scripts\\mine.ps1"));
 });
 
 test("invalid JSON is reported as an error without throwing", async () => {

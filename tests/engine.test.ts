@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { Source, UpgradeItem } from "../src/types";
+import type { Source, UpgradeItem, UpgradeResult } from "../src/types";
 
 // The engine must never hit the real package managers in tests: proc is mocked
 // so any accidental spawn is inert, and the sources below are hand-written.
@@ -49,6 +49,7 @@ describe("applyGroup", () => {
 
   test("falls back to upgrade per item and reports each result", async () => {
     const seen: string[] = [];
+    const reported: string[] = [];
     const source = fakeSource({
       id: "each",
       upgrade: async (entry) => {
@@ -61,10 +62,48 @@ describe("applyGroup", () => {
       source,
       [item({ id: "a" }), item({ id: "b" })],
       false,
-      { onResult: (result) => void result },
+      { onResult: (result) => reported.push(result.item.id) },
     );
     expect(seen).toEqual(["a", "b"]);
+    expect(reported).toEqual(["a", "b"]);
     expect(results.map((result) => result.ok)).toEqual([true, false]);
+  });
+
+  test("contains a throwing per-item upgrade as failed results", async () => {
+    const source = fakeSource({
+      id: "boom",
+      upgrade: async () => {
+        throw new Error("spawn failed");
+      },
+    });
+
+    const seen: UpgradeResult[] = [];
+    const results = await applyGroup(
+      source,
+      [item({ id: "a" }), item({ id: "b" })],
+      false,
+      { onResult: (result) => seen.push(result) },
+    );
+
+    // The throw must not escape: every item becomes a failure, and the
+    // remaining items still run.
+    expect(results.map((result) => result.ok)).toEqual([false, false]);
+    expect(results[0]?.error).toBe("spawn failed");
+    expect(results[0]?.command).toBe("boom");
+    expect(seen).toHaveLength(2);
+  });
+
+  test("contains a throwing upgradeBatch as failed results", async () => {
+    const source = fakeSource({
+      id: "boombatch",
+      upgradeBatch: async () => {
+        throw new Error("batch exploded");
+      },
+    });
+
+    const results = await applyGroup(source, [item({ id: "a" })], false);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ ok: false, command: "boombatch", error: "batch exploded" });
   });
 });
 

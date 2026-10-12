@@ -141,17 +141,36 @@ export class TerminalOverlay {
     });
     this.body.add(this.panel);
 
-    const proc = Bun.spawn(argv, {
-      cwd: options.cwd,
-      terminal: {
-        cols: 80,
-        rows: 24,
-        data: (_terminal: unknown, bytes?: Uint8Array) => {
-          const chunk = bytes ?? (_terminal as Uint8Array);
-          this.panel?.write(chunk);
+    let proc: ReturnType<typeof Bun.spawn>;
+    try {
+      proc = Bun.spawn(argv, {
+        cwd: options.cwd,
+        terminal: {
+          cols: 80,
+          rows: 24,
+          data: (_terminal: unknown, bytes?: Uint8Array) => {
+            const chunk = bytes ?? (_terminal as Uint8Array);
+            this.panel?.write(chunk);
+          },
         },
-      },
-    });
+      });
+    } catch (err) {
+      // A spawn failure must still resolve the caller (via onClose) and be
+      // reported as a failure, rather than hanging the app on a promise that
+      // never settles.
+      this.exitCode = -1;
+      try {
+        this.footer.content = truncate(
+          `failed to start: ${err instanceof Error ? err.message : String(err)}`,
+          80,
+        );
+        this.renderer.requestRender();
+      } catch {
+        // The renderer may already be gone.
+      }
+      this.close();
+      return -1;
+    }
     this.proc = proc;
 
     this.renderer.requestRender();
@@ -200,6 +219,9 @@ export class TerminalOverlay {
       } catch {
         // already gone
       }
+      // A killed child never reports a real exit code; make the abort visible
+      // so the caller doesn't count an aborted script as a success.
+      this.exitCode = -1;
     }
   }
 

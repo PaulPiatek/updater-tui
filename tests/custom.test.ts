@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCustomSource } from "../src/sources/custom";
@@ -56,6 +56,23 @@ test("lists one item per script and marks missing executables disabled", async (
   });
   expect(items[0]?.disabled).toBe(false);
   expect(items[1]?.disabled).toBe(true);
+});
+
+test("disambiguates ids when two scripts share a display name", async () => {
+  const dir = await tempDir();
+  await mkdir(join(dir, "a"), { recursive: true });
+  await mkdir(join(dir, "b"), { recursive: true });
+  const a = join(dir, "a", "update.cmd");
+  const b = join(dir, "b", "update.cmd");
+  await writeFile(a, "@echo off\n");
+  await writeFile(b, "@echo off\n");
+
+  const items = await createCustomSource([
+    script({ name: "update", path: a, cwd: dir, args: [] }),
+    script({ name: "update", path: b, cwd: dir, args: [] }),
+  ]).list();
+
+  expect(items.map((item) => item.id)).toEqual(["custom:update#1", "custom:update#2"]);
 });
 
 test("a script is disabled when its interpreter is missing", async () => {

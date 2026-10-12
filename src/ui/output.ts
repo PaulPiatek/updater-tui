@@ -58,6 +58,8 @@ export type StatusState = "pending" | "checking" | "good" | "empty" | "bad";
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /** ~12 fps: lively without repainting the pane on every render frame. */
 const SPINNER_INTERVAL_MS = 80;
+/** Upper bound on retained log lines, so a long session can't grow unbounded. */
+const MAX_LOG_LINES = 500;
 
 const statusColor = (state: StatusState): RGBA => {
   switch (state) {
@@ -300,6 +302,11 @@ export class OutputPane {
     });
     this.content.add(line);
     this.lines.push(line);
+    // Drop the oldest lines past the cap: re-entering the flow appends without
+    // ever clearing, so this would otherwise grow without bound.
+    while (this.lines.length > MAX_LOG_LINES) {
+      this.lines.shift()?.destroyRecursively();
+    }
     this.scroll.scrollTo(this.scroll.scrollHeight);
   }
 

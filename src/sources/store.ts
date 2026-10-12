@@ -98,7 +98,10 @@ export function parseStoreUpdates(output: string): UpgradeItem[] {
       // Defensive: if the list ever includes up-to-date apps, don't offer them.
       if (stateIndex >= 0 && UP_TO_DATE.test(cell(cells, stateIndex))) continue;
 
-      const id = `store:${name}`;
+      // Prefer the product id for the item id and the upgrade key when the
+      // table exposes one, so two apps sharing a display name stay distinct.
+      const storeId = cell(cells, idIndex);
+      const id = `store:${storeId || name}`;
       if (seen.has(id)) continue;
       seen.add(id);
 
@@ -109,8 +112,6 @@ export function parseStoreUpdates(output: string): UpgradeItem[] {
         current: cell(cells, versionIndex) || "installed",
         latest: cell(cells, availableIndex) || "update",
       };
-      // Prefer the product id for the upgrade key when the table exposes one.
-      const storeId = cell(cells, idIndex);
       if (storeId) item.meta = { storeId };
 
       items.push(item);
@@ -169,12 +170,12 @@ function clean(output: string): string {
   return stripAnsi(output).replace(/\r\n?/g, "\n").trim();
 }
 
-const looksFailed = (text: string): boolean =>
+export const looksFailed = (text: string): boolean =>
   /unknown parameter|no product found|not found|❌|✗|\berror\b|\bfailed\b|cancel|denied|unable|cannot/i.test(
     text,
   );
 
-const looksSucceeded = (text: string): boolean =>
+export const looksSucceeded = (text: string): boolean =>
   /✅|\binstalled\b|\bupdated\b|already up to date/i.test(text);
 
 /** Upgrades Microsoft Store apps through the StoreCLI (`store.exe`). */

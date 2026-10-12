@@ -186,6 +186,20 @@ describe("scan transitions", () => {
     expect(flow.scanning).toBe(true);
   });
 
+  test("beginScan drops the previous scan's items", () => {
+    const done = applyScanResults(
+      beginScan(initialFlow(rows)),
+      [item({ id: "npm:a" })],
+      [],
+    );
+    expect(done.groups).toHaveLength(1);
+
+    const scanning = beginScan(done);
+    expect(scanning.groups).toEqual([]);
+    expect(scanning.itemOrder).toEqual([]);
+    expect(scanning.selectedItems.size).toBe(0);
+  });
+
   test("applyScanResults installs groups, defaults and errors", () => {
     const scanning = beginScan(initialFlow(rows));
     const done = applyScanResults(

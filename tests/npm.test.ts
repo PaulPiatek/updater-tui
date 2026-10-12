@@ -59,6 +59,23 @@ test("surfaces a real error from npm", async () => {
   await expect(npmSource.list()).rejects.toThrow("network down");
 });
 
+test("surfaces npm's JSON error object instead of listing a fake package", async () => {
+  // npm prints failures as a JSON object on stdout too, still with exit 1.
+  runResult = {
+    code: 1,
+    stdout: JSON.stringify({
+      error: { code: "ECONNREFUSED", summary: "FetchError: connect ECONNREFUSED" },
+    }),
+    stderr: "",
+  };
+  await expect(npmSource.list()).rejects.toThrow("FetchError: connect ECONNREFUSED");
+});
+
+test("skips entries that carry no version information", async () => {
+  runResult = { code: 1, stdout: JSON.stringify({ mystery: {} }), stderr: "" };
+  expect(await npmSource.list()).toEqual([]);
+});
+
 test("dry-run reports the command without executing it", async () => {
   const item = {
     id: "npm:is-odd",

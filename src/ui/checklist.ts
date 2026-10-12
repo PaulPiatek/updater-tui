@@ -140,9 +140,11 @@ export class Checklist {
   setCursor(position: number): void {
     const indexes = this.selectableIndexes();
     const index = indexes.length === 0 ? -1 : indexes[Math.min(Math.max(position, 0), indexes.length - 1)]!;
-    if (index === this.cursor) return;
+    const changed = index !== this.cursor;
     this.cursor = index;
-    this.refreshHighlight();
+    if (changed) this.refreshHighlight();
+    // Always scroll, even when the mapped index is unchanged: a re-scan can
+    // leave the cursor on the same row while the list around it changed.
     if (index >= 0) {
       const id = this.rows[index]?.id;
       if (id) this.scroll.scrollChildIntoView(this.rowDomId(id));

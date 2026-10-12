@@ -78,6 +78,8 @@ custom scripts' own `pause`/`input()` — can't read keys.
 - `console-mode.ts` snapshots the real `GetConsoleMode` value via `bun:ffi` and
   restores it **exactly** with `SetConsoleMode`.
 - `proc.run()` wraps every `inherit: true` spawn in `withConsoleModeRestored`.
+  The elevated Windows Update batch wraps its captured spawn too (it is not
+  `inherit`, so `proc.run` alone wouldn't cover it).
 
 **Keep this.** Whatever UI you build, route inherited children through
 `proc.run()` so the console is restored. Verified: `0x1f7` → `0x1f7` even when a
@@ -103,14 +105,15 @@ the whole screen.
   receives the interrupt it expects.
 - The overlay **auto-closes** when the child exits (after a brief `exited N`).
 - **Elevated children cannot be captured or pty-hosted.** `Start-Process -Verb
-  RunAs` opens its own console, so Windows Update keeps the old `suspend()` /
-  `resume()` path and cannot stream. The app therefore has **two** presentation
-  modes; that is expected.
+  RunAs` opens its own console, so Windows Update runs its elevated batch through
+  a captured `proc.run` (not the pty) and cannot stream. The app therefore has
+  **two** presentation modes; that is expected.
 
 The app stays tool-agnostic: it exposes a `hostProcess` capability on
 `UpgradeOptions`, and the source calls it with its own argv. When `hostProcess`
 is absent (headless, `--dry-run`, tests) the source runs the process itself via
-`proc.run(..., { inherit: true })` — see rule 2 for why that matters.
+`proc.run`, inheriting the terminal only when stdin is a TTY — see rule 2 for why
+that matters.
 
 A script does **not** need a trailing `pause` — but it may keep one to let the
 user read the output. Any such pause must be guarded so a piped or scripted run
@@ -373,7 +376,8 @@ worth keeping because the cause is now understood:
   compiled exe** — fed by `Bun.spawn(..., { terminal })` / a `Bun.Terminal`.
   Output renders, typed keys reach the child, prompts work.
 - **Elevated commands cannot be captured.** `Start-Process -Verb RunAs` opens its
-  own console, so a pty sees nothing. Windows Update stays on suspend/resume.
+  own console, so a pty sees nothing. Windows Update runs its batch captured (no
+  pty) instead.
 
 **Why it failed the first time — and the fix.** The streamed child exited
 immediately instead of waiting at its prompt. Cause: when a single keypress both

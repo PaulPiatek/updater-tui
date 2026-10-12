@@ -11,9 +11,10 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "icon": "bun run scripts/make-icon.ts",
-    "build:exe": "bun build --compile --outfile=dist/updater-tui.exe --windows-icon=assets/icon.ico --windows-title=updater-tui --windows-publisher=Paul --windows-version=1.0.0.0 --windows-description=\"Interactive updater (TUI) for npm, winget, Windows Update and custom scripts\" ./src/index.ts",
+    "build:exe": "bun build --compile --target=bun-windows-x64 --outfile=dist/updater-tui.exe --windows-icon=assets/icon.ico --windows-title=updater-tui --windows-publisher=Paul --windows-version=1.0.0.0 --windows-description=\"Interactive updater (TUI) for npm, winget, Windows Update and custom scripts\" ./src/index.ts",
     "install:exe": "bun run scripts/install.ts"
   },
+  "license": "MIT",
   "dependencies": {
     "@opentui/core": "0.6.2"
   },

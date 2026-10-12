@@ -102,6 +102,9 @@ export const wingetSource: Source = {
     const res = await run([
       WINGET,
       "upgrade",
+      // Packages whose installed version can't be determined are hidden
+      // otherwise; they render as `Unknown → <available>` and are still valid.
+      "--include-unknown",
       "--disable-interactivity",
       "--accept-source-agreements",
     ]);

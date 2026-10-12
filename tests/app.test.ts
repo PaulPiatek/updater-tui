@@ -53,7 +53,8 @@ describe("App (imperative UI)", () => {
           dryRun: false,
         });
         void app.run();
-        await frame(setup, (f) => f.includes("Custom scripts"));
+        const text = await frame(setup, (f) => f.includes("Custom scripts"));
+        expect(text).toContain("Custom scripts");
 
         const rootBox = setup.renderer.root.getChildren()[0] as BoxRenderable;
         const body = rootBox.getChildren()[0] as BoxRenderable;
@@ -166,6 +167,15 @@ describe("exitCodeFor", () => {
 
   test("1 when any upgrade failed", () => {
     expect(exitCodeFor("Done: 2 upgraded, 1 failed.")).toBe(1);
+  });
+
+  test("0 for a successful dry run (would upgrade)", () => {
+    expect(exitCodeFor("Done: 3 would upgrade, 0 failed.")).toBe(0);
+    expect(exitCodeFor("Done: 0 would upgrade, 0 failed.")).toBe(0);
+  });
+
+  test("1 when a dry run reported failures", () => {
+    expect(exitCodeFor("Done: 2 would upgrade, 1 failed.")).toBe(1);
   });
 
   test("1 for a failed start or scan, not just the word 'errors'", () => {

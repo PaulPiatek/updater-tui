@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseStoreUpdates, stripAnsi } from "../src/sources/store";
+import { looksFailed, looksSucceeded, parseStoreUpdates, stripAnsi } from "../src/sources/store";
 
 const B = "\u001b[38;5;238m"; // border
 const H = "\u001b[38;5;189m"; // header / emphasis
@@ -55,6 +55,25 @@ const headerRow = (...names: string[]): string =>
 describe("stripAnsi", () => {
   test("removes SGR sequences", () => {
     expect(stripAnsi("\u001b[38;5;8mNo updates found.\u001b[0m")).toBe("No updates found.");
+  });
+});
+
+describe("store result heuristic", () => {
+  // The StoreCLI exits 0 even for a bad parameter, so `upgrade` reads the
+  // output instead. These guard that mapping.
+  test("treats success markers as success", () => {
+    expect(looksSucceeded("✅ Installed Windows Terminal")).toBe(true);
+    expect(looksSucceeded("App updated")).toBe(true);
+  });
+
+  test("treats errors, cancels and unknown parameters as failure", () => {
+    expect(looksFailed("❌ Cancelled")).toBe(true);
+    expect(looksFailed("Unknown parameter(s): --nope")).toBe(true);
+    expect(looksFailed("The app was not found")).toBe(true);
+  });
+
+  test("does not read a plain success as failure", () => {
+    expect(looksFailed("✅ Installed")).toBe(false);
   });
 });
 

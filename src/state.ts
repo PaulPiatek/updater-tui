@@ -212,6 +212,11 @@ export function beginScan(state: FlowState): FlowState {
     ...state,
     stage: "scanning",
     scanning: true,
+    // Drop the previous scan's items so the pane can't show stale packages
+    // (with stale check marks) while the new scan is still running.
+    groups: [],
+    selectedItems: new Set(),
+    itemOrder: [],
     itemCursor: 0,
   };
 }

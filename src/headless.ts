@@ -4,7 +4,7 @@
  * and stay usable from scripts and CI.
  */
 import type { UpgradeItem, UpgradeResult } from "./types";
-import { applyGroup, discover, groupBySource, scan } from "./engine";
+import { applyGroup, discover, groupBySource, scan, type Engine } from "./engine";
 import { isLocked, lockedHint } from "./state";
 
 export interface HeadlessOptions {
@@ -22,7 +22,7 @@ const err = (text: string) => process.stderr.write(`${text}\n`);
 
 /** Runs the non-interactive flow and returns the exit code. */
 export async function runHeadless(opts: HeadlessOptions): Promise<number> {
-  let engine;
+  let engine: Engine;
   try {
     engine = await discover({ cwd: opts.cwd, sourceFilter: opts.sourceFilter });
   } catch (cause) {
@@ -30,16 +30,21 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
     return 1;
   }
 
+  for (const warning of engine.warnings ?? []) err(`warning: ${warning}`);
+
   const wanted = engine.sources
     .filter((entry) => entry.available)
     .map((entry) => entry.source.id);
 
   const { items, ignored, pinned, errors } = await scan(engine, wanted);
+  // A source that failed to scan is a failure for the whole run, in every
+  // output mode — not just `--json`.
+  const scanFailed = errors.length > 0;
 
   if (opts.json) {
     out(JSON.stringify(items, null, 2));
     for (const failure of errors) err(failure);
-    return errors.length > 0 ? 1 : 0;
+    return scanFailed ? 1 : 0;
   }
 
   for (const failure of errors) err(`error: ${failure}`);
@@ -51,7 +56,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
 
   if (upgradable.length === 0) {
     out(items.length > 0 ? "Nothing to do." : "Nothing to do 🎉");
-    return errors.length > 0 ? 1 : 0;
+    return scanFailed ? 1 : 0;
   }
 
   if (opts.dryRun) {
@@ -64,7 +69,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
       out(`  $ ${result.command}`);
     }
     out(`Would upgrade ${planned.length} package(s).`);
-    return 0;
+    return scanFailed ? 1 : 0;
   }
 
   if (!opts.yes) {
@@ -95,5 +100,5 @@ export async function runHeadless(opts: HeadlessOptions): Promise<number> {
 
   if (reboot) out("⚠ A restart is required to finish some updates.");
   out(`Done: ${ok} upgraded, ${failed} failed.`);
-  return failed > 0 ? 1 : 0;
+  return failed > 0 || scanFailed ? 1 : 0;
 }

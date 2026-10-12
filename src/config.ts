@@ -192,7 +192,12 @@ export async function loadConfigFiles(paths: { user: string; project: string }):
   if (projectRead.error) errors.push(projectRead.error);
 
   const scripts = projectRead.config?.scripts ?? userRead.config?.scripts ?? [];
-  const scriptsDir = projectRead.config ? dirname(paths.project) : dirname(paths.user);
+  // Resolve relative script paths against the file that actually supplied them
+  // — not merely against the project file just because it happens to exist.
+  const scriptsDir =
+    projectRead.config?.scripts !== undefined
+      ? dirname(paths.project)
+      : dirname(paths.user);
 
   return {
     ignore: projectRead.config?.ignore ?? userRead.config?.ignore ?? [],
@@ -260,7 +265,9 @@ export function matchesRule(entry: string, item: UpgradeItem): boolean {
     return false;
   }
 
-  if (namePattern === "") return true;
+  // `source:` with an empty pattern means "everything in that source". A bare
+  // empty pattern matches nothing (it must not be read as "everything").
+  if (sourcePattern !== null && namePattern === "") return true;
 
   const regex = globToRegExp(namePattern);
   if (regex.test(item.name) || regex.test(item.id)) return true;

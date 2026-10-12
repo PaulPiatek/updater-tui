@@ -150,12 +150,16 @@ export class App {
         cwd: this.options.cwd,
         sourceFilter: this.options.sourceFilter,
       });
+      if (this.finished) return;
       this.engine = found;
       const rows = sourceRows(
         found.sources.map((entry) => entry.source),
         new Map(found.sources.map((entry) => [entry.source.id, entry.available])),
       );
       this.state = initialFlow(rows);
+      for (const warning of found.warnings ?? []) {
+        this.output.push("warn", warning);
+      }
       for (const row of rows) {
         if (!row.available) {
           this.output.push("warn", `${row.title}: not available on this machine`);
@@ -164,6 +168,7 @@ export class App {
       this.output.push("info", "Select sources, then Enter to scan.");
       this.refresh();
     } catch (err) {
+      if (this.finished) return;
       this.output.push("bad", err instanceof Error ? err.message : String(err));
       this.setSummary("Cannot start.");
     }
@@ -194,15 +199,22 @@ export class App {
 
     try {
       const result = await scan(this.engine, [...current.selectedSources], {
-        onScanStart: (source) => this.output.setStatus(source.id, "checking", "checking…"),
-        onScanDone: (source, items) =>
+        onScanStart: (source) => {
+          if (!this.finished) this.output.setStatus(source.id, "checking", "checking…");
+        },
+        onScanDone: (source, items) => {
+          if (this.finished) return;
           this.output.setStatus(
             source.id,
             items.length > 0 ? "good" : "empty",
             items.length > 0 ? `${items.length} update(s)` : "up to date",
-          ),
-        onScanError: (source, detail) => this.output.setStatus(source.id, "bad", detail),
+          );
+        },
+        onScanError: (source, detail) => {
+          if (!this.finished) this.output.setStatus(source.id, "bad", detail);
+        },
       });
+      if (this.finished) return;
       this.state = applyScanResults(this.state, result.items, result.errors);
 
       if (result.ignored + result.pinned > 0) {
@@ -219,11 +231,12 @@ export class App {
         this.output.push("info", "Choose packages, then Enter to upgrade.");
       }
     } catch (err) {
+      if (this.finished) return;
       this.output.push("bad", err instanceof Error ? err.message : String(err));
       this.setSummary("Scan failed.");
     } finally {
       this.busy = false;
-      this.refresh();
+      if (!this.finished) this.refresh();
     }
   }
 
@@ -251,6 +264,9 @@ export class App {
 
     try {
       for (const group of groupBySource(this.engine, chosen)) {
+        // The user may have quit while a previous group ran; stop rather than
+        // writing to a destroyed render tree.
+        if (this.finished) break;
         // Sources that print to the terminal themselves (custom scripts) are
         // hosted in an overlay on a pty, so their output streams live and their
         // prompts work without giving up the whole screen.
@@ -262,27 +278,29 @@ export class App {
               this.hostProcess(argv, opts)
           : undefined;
 
-        try {
-          const results = await applyGroup(
-            group.source,
-            group.items,
-            this.options.dryRun,
-            { onResult: (result) => this.logResult(result) },
-            { hostProcess },
-          );
-          for (const result of results) {
-            if (result.ok) ok++;
-            else failed++;
-            if (result.rebootRequired) reboot = true;
-          }
-        } finally {
-          // no-op for non-streaming sources
+        const results = await applyGroup(
+          group.source,
+          group.items,
+          this.options.dryRun,
+          { onResult: (result) => this.logResult(result) },
+          { hostProcess },
+        );
+        for (const result of results) {
+          if (result.ok) ok++;
+          else failed++;
+          if (result.rebootRequired) reboot = true;
         }
       }
     } catch (err) {
+      if (this.finished) return;
       this.output.push("bad", err instanceof Error ? err.message : String(err));
       failed++;
     }
+
+    this.busy = false;
+    // The user may have quit (closing the overlay) while the last script ran,
+    // in which case the render tree is gone and must not be touched again.
+    if (this.finished) return;
 
     if (reboot) {
       this.output.push("warn", "A restart is required to finish some updates.");
@@ -291,10 +309,7 @@ export class App {
     this.state = { ...this.state, stage: "done" };
     const verb = this.options.dryRun ? "would upgrade" : "upgraded";
     this.setSummary(`Done: ${ok} ${verb}, ${failed} failed.`);
-    this.busy = false;
-    // The user may have quit (closing the overlay) while the last script ran,
-    // in which case the render tree is gone and must not be touched again.
-    if (!this.finished) this.refresh();
+    this.refresh();
   }
 
   /** Hosts one script in a terminal overlay and resolves with its exit code. */
@@ -315,6 +330,7 @@ export class App {
   }
 
   private logResult(result: UpgradeResult): void {
+    if (this.finished) return;
     if (result.ok) {
       this.output.push("good", `${result.item.name}  ${lockedHint(result.item)}`);
     } else {
@@ -330,14 +346,18 @@ export class App {
   // ---------------------------------------------------------------------------
   private onKey = (key: KeyEvent): void => {
     if (this.finished) return;
-    if (key.name === "q") {
-      this.quit(this.summary ? exitCodeFor(this.summary) : 130);
-      return;
-    }
+    // While a hosted script owns the screen, keys belong to it: the overlay
+    // handles its own Esc / Ctrl+Q, and plain `q` must reach the child. (A scan
+    // has no overlay, so `q` still quits there.)
+    if (this.activeOverlay) return;
     if (this.summary) {
-      if (key.name === "return" || key.name === "escape") {
+      if (key.name === "return" || key.name === "escape" || key.name === "q") {
         this.quit(exitCodeFor(this.summary));
       }
+      return;
+    }
+    if (key.name === "q") {
+      this.quit(130);
       return;
     }
     if (this.busy) return;
@@ -527,7 +547,7 @@ export class App {
  * except the explicit nothing-to-do case.
  */
 export function exitCodeFor(summary: string): number {
-  const match = /Done: \d+ upgraded, (\d+) failed/.exec(summary);
+  const match = /Done: \d+ (?:would upgrade|upgraded), (\d+) failed/.exec(summary);
   if (match) return Number(match[1]) > 0 ? 1 : 0;
   if (/nothing to do/i.test(summary)) return 0;
   return 1;

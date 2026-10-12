@@ -62,11 +62,22 @@ test("omits the hint when there is no KB or size", () => {
   expect(items[0]?.latest).toBe("update");
 });
 
+test("parses a single JSON array (ConvertTo-Json for many items)", () => {
+  const array = JSON.stringify([
+    { UpdateID: "a", Title: "One", KB: "111", SizeMB: 10 },
+    { UpdateID: "b", Title: "Two", KB: "222", SizeMB: 20 },
+  ]);
+  const items = parseWindowsUpdates(array);
+  expect(items.map((item) => item.id)).toEqual(["windows-update:a", "windows-update:b"]);
+});
+
 test("formatSize rounds sensibly", () => {
   expect(formatSize(512)).toBe("512 MB");
   expect(formatSize(2048)).toBe("2.0 GB");
   expect(formatSize(0)).toBe("");
   expect(formatSize(Number.NaN)).toBe("");
+  // A sub-half-MB update must not collapse to "0 MB".
+  expect(formatSize(0.4)).toBe("1 MB");
 });
 
 test("parseInstallResults handles arrays, single objects and junk", () => {

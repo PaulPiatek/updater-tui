@@ -69,16 +69,23 @@ if (!(await confirm(`Install ${SOURCE} to ${target}? [Y/n] `))) {
 
 await mkdir(dir, { recursive: true });
 
-// Write to a temp name first, then rename, so a running `updater-tui.exe` that
-// is locked on Windows isn't left half-overwritten.
+// Write to a temp name first, then rename. `rename` replaces an existing file
+// atomically, which works when `updater-tui.exe` is closed. Only if that fails
+// (the target is locked by a running process) fall back to removing it first —
+// which fails loudly rather than leaving the exe half-overwritten.
 const staging = `${target}.new`;
 try {
   await copyFile(SOURCE, staging);
-  await rm(target, { force: true });
-  await rename(staging, target);
+  try {
+    await rename(staging, target);
+  } catch {
+    await rm(target, { force: true });
+    await rename(staging, target);
+  }
 } catch (err) {
   await rm(staging, { force: true }).catch(() => {});
   console.error(`✖ Failed to install: ${err instanceof Error ? err.message : String(err)}`);
+  console.error("  If updater-tui is running, close it and retry.");
   process.exit(1);
 }
 

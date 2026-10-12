@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "../types";
 import { run } from "../proc";
+import { withConsoleModeRestored } from "../console-mode";
 
 const POWERSHELL = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe";
 
@@ -53,7 +54,7 @@ interface WuInstallRecord {
 /** Human-readable size; empty string when unknown. */
 export function formatSize(sizeMB: number): string {
   if (!Number.isFinite(sizeMB) || sizeMB <= 0) return "";
-  return sizeMB >= 1024 ? `${(sizeMB / 1024).toFixed(1)} GB` : `${Math.round(sizeMB)} MB`;
+  return sizeMB >= 1024 ? `${(sizeMB / 1024).toFixed(1)} GB` : `${Math.max(1, Math.round(sizeMB))} MB`;
 }
 
 const stripBom = (text: string): string => text.replace(/^\uFEFF/, "");
@@ -196,20 +197,29 @@ async function runBatch(
   try {
     await Bun.write(scriptPath, buildInstallScript(ids, resultPath));
 
+    // `-ArgumentList` is joined into one command line, so the script path must
+    // be quoted *inside* it — otherwise a `%TEMP%` containing a space (e.g.
+    // `C:\Users\John Smith\...`) is split and the child never runs the script.
     const launch =
       `$ErrorActionPreference = 'Stop'; ` +
       `Start-Process -FilePath ${psLiteral(POWERSHELL)} -Verb RunAs -Wait ` +
-      `-ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',${psLiteral(scriptPath)}`;
+      `-ArgumentList ${psLiteral(
+        `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"`,
+      )}`;
 
-    const res = await run([
-      POWERSHELL,
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      launch,
-    ]);
+    // The elevated (UAC) child can disturb the shared console input mode; it is
+    // captured rather than inherited, so `proc.run` doesn't wrap it — do it here.
+    const res = await withConsoleModeRestored(() =>
+      run([
+        POWERSHELL,
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        launch,
+      ]),
+    );
 
     if (res.code !== 0) {
       throw new Error(res.stderr.trim() || `elevation failed (exit code ${res.code})`);

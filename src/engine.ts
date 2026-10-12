@@ -31,6 +31,8 @@ export interface EngineEvents {
 export interface Engine {
   config: LoadedConfig;
   sources: AvailableSource[];
+  /** Non-fatal problems found during discovery (e.g. unknown `--source` ids). */
+  warnings?: string[];
 }
 
 const message = (err: unknown): string =>
@@ -48,14 +50,14 @@ export async function discover(options: {
   sourceFilter?: string[];
 } = {}): Promise<Engine> {
   const config = await loadConfig(options.cwd);
-  const candidates = createSources(config).filter(
-    (source) =>
-      !options.sourceFilter?.length ||
-      options.sourceFilter.includes(source.id),
+  const all = createSources(config);
+  const filter = options.sourceFilter ?? [];
+  const candidates = all.filter(
+    (source) => filter.length === 0 || filter.includes(source.id),
   );
 
   if (candidates.length === 0) {
-    throw new Error(`Unknown source(s): ${options.sourceFilter?.join(", ")}`);
+    throw new Error(`Unknown source(s): ${filter.join(", ")}`);
   }
 
   const sources: AvailableSource[] = [];
@@ -67,7 +69,13 @@ export async function discover(options: {
     throw new Error("No usable sources found.");
   }
 
-  return { config, sources };
+  // A filter that is only partly wrong (`--source npm --source wingett`) still
+  // runs, but say which ids were ignored instead of silently dropping them.
+  const unknown = filter.filter((id) => !all.some((source) => source.id === id));
+  const warnings =
+    unknown.length > 0 ? [`Ignoring unknown source(s): ${unknown.join(", ")}`] : [];
+
+  return { config, sources, warnings };
 }
 
 /**
@@ -125,15 +133,36 @@ export async function applyGroup(
 ): Promise<UpgradeResult[]> {
   const opts: UpgradeOptions = { dryRun, ...extra };
 
+  // A source that throws (a spawn failure after discovery, say) must not abort
+  // the whole run: turn it into failed results so the remaining groups still
+  // run, matching how `scan` contains per-source errors.
+  const failed = (item: UpgradeItem, err: unknown): UpgradeResult => ({
+    item,
+    ok: false,
+    command: source.title,
+    error: message(err),
+  });
+
   if (source.upgradeBatch) {
-    const results = await source.upgradeBatch(items, opts);
-    for (const result of results) events.onResult?.(result);
-    return results;
+    try {
+      const results = await source.upgradeBatch(items, opts);
+      for (const result of results) events.onResult?.(result);
+      return results;
+    } catch (err) {
+      const results = items.map((item) => failed(item, err));
+      for (const result of results) events.onResult?.(result);
+      return results;
+    }
   }
 
   const results: UpgradeResult[] = [];
   for (const item of items) {
-    const result = await source.upgrade(item, opts);
+    let result: UpgradeResult;
+    try {
+      result = await source.upgrade(item, opts);
+    } catch (err) {
+      result = failed(item, err);
+    }
     results.push(result);
     events.onResult?.(result);
   }
