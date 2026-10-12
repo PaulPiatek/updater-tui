@@ -190,9 +190,8 @@ describe("Checklist", () => {
     }
   });
 
-  // OpenTUI 0.6 replaced the renderable `resized` event with the `onSizeChange`
-  // hook. Registering the old event still typechecks but throws at runtime, and
-  // the list would keep stale truncation — so resize the pane and look.
+  // Label truncation is driven by the pane's size-change hook, so resize the
+  // renderer and check the row re-fits rather than keeping its old truncation.
   test("re-truncates labels when the pane is resized", async () => {
     const ui = await mount();
     const label = "a-very-long-package-name-that-needs-truncating-in-a-narrow-pane";

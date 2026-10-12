@@ -286,23 +286,6 @@ assert on "the screen contains X" there; assert on a marker that implies a
 
 `@xterm/headless` is not needed (and must not be added to app deps).
 
-### OpenTUI 0.6 moved the render tree into native code
-
-The app is on `@opentui/core` 0.6.x. Two changes bit us and are worth knowing:
-
-- **`on("resized")` is gone.** On a non-root renderable it now *throws* ("Native
-  scene does not support resized hooks"), yet it still typechecks — so the tests
-  caught it, the compiler did not. Use the `onSizeChange` hook instead
-  (`this.root.onSizeChange = () => …`); `tests/checklist.test.ts` resizes the
-  renderer and asserts labels re-truncate, which is what would regress.
-- **Frame cells are read through `withBuffers()`.** `buffer.buffers` now throws
-  outside a synchronous scope, and each cell is 4 × `Uint16` (the packing
-  `RGBA` itself uses), not 4 bytes — see the `cell()` helper in
-  `tests/theme.test.ts`.
-
-`EmbeddedTerminalRenderable` and the rest of the imperative core API survive the
-rewrite, in source **and in the compiled exe** (`scripts/overlay-exe-check.ts`).
-
 ---
 
 ## Why the UI is imperative (no Solid/React)

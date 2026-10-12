@@ -90,7 +90,6 @@ export class Checklist {
     this.root.add(this.scroll);
 
     // Truncated labels depend on the pane width, so recompute on resize.
-    // OpenTUI 0.6 replaced the `resized` event with this single hook.
     this.root.onSizeChange = () => this.refreshHighlight();
   }
 

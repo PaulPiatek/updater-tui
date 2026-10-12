@@ -151,7 +151,6 @@ export class OutputPane {
     this.root.add(this.scroll);
 
     // The label/value split depends on the pane width, so re-fit on resize.
-    // OpenTUI 0.6 replaced the `resized` event with this single hook.
     this.root.onSizeChange = () => this.layoutStatus();
   }
 

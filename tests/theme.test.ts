@@ -44,9 +44,8 @@ function cell(
   x: number,
   y: number,
 ): RGBA {
-  // OpenTUI 0.6 owns its framebuffer in native code, so the planes are only
-  // reachable inside a `withBuffers` scope. Each cell is 4 `Uint16`s (the same
-  // packing `RGBA` uses), not 4 bytes.
+  // The render planes are only reachable inside a `withBuffers` scope, and each
+  // cell is 4 `Uint16`s (the same packing `RGBA` uses), not 4 bytes.
   const buffer = setup.renderer.currentRenderBuffer;
   return buffer.withBuffers((cells) => {
     const offset = (y * cells.width + x) * 4;
