@@ -250,6 +250,15 @@ bun run build:exe && bun run install:exe
 confirmation; `--yes` skips the prompt. It stages to a `.new` file and renames,
 so re-installing over a running `updater-tui.exe` is safe.
 
+### Versioning
+
+The updater's version lives in **one** place: `package.json` `version`. It is the
+`--version` output *and* the exe's Windows file version — `scripts/build-exe.ts`
+reads it into `--windows-version`, so the two can't drift. Bump it before
+shipping. `install:exe` reads the embedded `FileVersion` from both the staged and
+installed exe; if they match, it prints a `⚠ Version unchanged` warning and the
+confirmation prompt defaults to **no**, so the mistake is hard to make silently.
+
 Two gotchas learned the hard way:
 
 - **If the copy is interrupted** (e.g. an agent harness kills the process

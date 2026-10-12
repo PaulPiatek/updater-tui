@@ -188,7 +188,7 @@ bun run typecheck
 | `test`        | `bun test`                     | Unit + frame tests.                                           |
 | `typecheck`   | `tsc --noEmit`                 | Strict type check.                                            |
 | `icon`        | `bun run scripts/make-icon.ts` | Regenerate `assets/icon.ico` (drawn in code).                 |
-| `build:exe`   | `bun build --compile …`        | Build `dist/updater-tui.exe`.                                 |
+| `build:exe`   | `bun run scripts/build-exe.ts` | Build `dist/updater-tui.exe` (version from package.json).     |
 | `install:exe` | `bun run scripts/install.ts`   | Copy the exe to `~/.local/bin` (asks; `--yes` skips).         |
 
 Interactive checks that need a real terminal (not part of `bun test`):

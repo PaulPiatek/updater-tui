@@ -31,7 +31,7 @@ function isOnPath(dir: string): boolean {
   return parts.some((part) => normalise(part) === normalise(dir));
 }
 
-async function confirm(question: string): Promise<boolean> {
+async function confirm(question: string, defaultYes = true): Promise<boolean> {
   // `--yes` means "don't ask" — never touch stdin.
   if (ASSUME_YES) return true;
 
@@ -47,10 +47,34 @@ async function confirm(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = (await rl.question(question)).trim().toLowerCase();
-    return answer === "" || answer === "y" || answer === "yes";
+    if (answer === "") return defaultYes;
+    return answer === "y" || answer === "yes";
   } finally {
     rl.close();
   }
+}
+
+/**
+ * The Windows file version embedded in an exe (e.g. `1.0.0.0`), or undefined
+ * when the file is missing or unreadable. Read from the artifact itself rather
+ * than package.json, so it reflects what is actually being shipped.
+ */
+async function exeVersion(path: string): Promise<string | undefined> {
+  if (!(await Bun.file(path).exists())) return undefined;
+  const literal = path.replace(/'/g, "''");
+  const proc = Bun.spawn(
+    [
+      "powershell.exe",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-Item -LiteralPath '${literal}').VersionInfo.FileVersion`,
+    ],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  const text = (await new Response(proc.stdout).text()).trim();
+  await proc.exited;
+  return text === "" ? undefined : text;
 }
 
 const source = Bun.file(SOURCE);
@@ -62,7 +86,25 @@ if (!(await source.exists())) {
 const dir = binDir();
 const target = join(dir, EXE);
 
-if (!(await confirm(`Install ${SOURCE} to ${target}? [Y/n] `))) {
+// Warn when the exe about to be installed carries the same version as the one
+// already in place — the usual symptom of forgetting to bump `version` in
+// package.json before shipping. The prompt then defaults to "no".
+const incoming = await exeVersion(SOURCE);
+const installed = await exeVersion(target);
+const unchanged = incoming !== undefined && incoming === installed;
+
+if (unchanged) {
+  console.log(`⚠ Version unchanged: both exes report ${incoming}.`);
+  console.log("  Bump `version` in package.json (then `bun run build:exe`) if this ships a change.");
+} else if (incoming !== undefined) {
+  console.log(`Version ${installed ?? "(not installed)"} → ${incoming}`);
+}
+
+const prompt = unchanged
+  ? `Install anyway (same version ${incoming})? [y/N] `
+  : `Install ${SOURCE} to ${target}? [Y/n] `;
+
+if (!(await confirm(prompt, !unchanged))) {
   console.log("Cancelled.");
   process.exit(0);
 }
