@@ -37,16 +37,21 @@ function glyphs(setup: Awaited<ReturnType<typeof render>>) {
     .filter((span) => span.text.trim().length > 0);
 }
 
-/** The packed colour of one cell, straight out of the render buffer. */
+/** The resolved colour of one cell, read through the render buffer. */
 function cell(
   setup: Awaited<ReturnType<typeof render>>,
   channel: "fg" | "bg",
   x: number,
   y: number,
 ): RGBA {
+  // OpenTUI 0.6 owns its framebuffer in native code, so the planes are only
+  // reachable inside a `withBuffers` scope. Each cell is 4 `Uint16`s (the same
+  // packing `RGBA` uses), not 4 bytes.
   const buffer = setup.renderer.currentRenderBuffer;
-  const offset = (y * buffer.width + x) * 4;
-  return RGBA.fromArray(buffer.buffers[channel].subarray(offset, offset + 4));
+  return buffer.withBuffers((cells) => {
+    const offset = (y * cells.width + x) * 4;
+    return RGBA.fromArray(cells[channel].subarray(offset, offset + 4));
+  });
 }
 
 describe("theme colours", () => {

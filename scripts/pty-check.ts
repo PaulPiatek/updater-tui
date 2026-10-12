@@ -125,15 +125,20 @@ async function customScriptCase(): Promise<boolean> {
     await app.dispose();
     await rm(dir, { recursive: true, force: true });
   }
-  return report("custom script (suspend/resume)", results);
+  return report("custom script (embedded terminal)", results);
 }
 
 /** Boots the app normally and checks both panes and a clean quit. */
 async function smokeCase(): Promise<boolean> {
   const dir = await mkdtemp(join(tmpdir(), "updater-tui-smoke-"));
+  // The custom source is only registered when a script is configured, so a
+  // bare `scripts: []` makes `--source custom` an unknown source and the app
+  // never gets past "Cannot start.".
+  const scriptPath = join(dir, "noop.cmd");
+  await writeFile(scriptPath, ["@echo off", "exit /b 0"].join("\r\n"));
   await writeFile(
     join(dir, "updater.config.json"),
-    JSON.stringify({ ignore: [], pin: [], scripts: [] }),
+    JSON.stringify({ ignore: [], pin: [], scripts: [{ name: "noop", path: scriptPath }] }),
   );
   const app = await spawnApp(["--source", "custom"], dir);
   const results: Array<[string, boolean]> = [];

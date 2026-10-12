@@ -7,7 +7,6 @@
  */
 import {
   BoxRenderable,
-  LayoutEvents,
   ScrollBoxRenderable,
   TextRenderable,
   type RGBA,
@@ -152,7 +151,8 @@ export class OutputPane {
     this.root.add(this.scroll);
 
     // The label/value split depends on the pane width, so re-fit on resize.
-    this.root.on(LayoutEvents.RESIZED, () => this.layoutStatus());
+    // OpenTUI 0.6 replaced the `resized` event with this single hook.
+    this.root.onSizeChange = () => this.layoutStatus();
   }
 
   /**

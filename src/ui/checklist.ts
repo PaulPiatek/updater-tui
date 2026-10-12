@@ -14,7 +14,6 @@
  */
 import {
   BoxRenderable,
-  LayoutEvents,
   ScrollBoxRenderable,
   TextRenderable,
   type RenderContext,
@@ -91,7 +90,8 @@ export class Checklist {
     this.root.add(this.scroll);
 
     // Truncated labels depend on the pane width, so recompute on resize.
-    this.root.on(LayoutEvents.RESIZED, () => this.refreshHighlight());
+    // OpenTUI 0.6 replaced the `resized` event with this single hook.
+    this.root.onSizeChange = () => this.refreshHighlight();
   }
 
   /** Replaces the pane title (stage 1 → 2). */

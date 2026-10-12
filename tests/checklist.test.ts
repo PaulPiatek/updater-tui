@@ -11,6 +11,7 @@ async function mount(): Promise<{
   checklist: Checklist;
   frame: () => string;
   render: () => Promise<unknown>;
+  resize: (width: number) => void;
   dispose: () => void;
 }> {
   const setup = await createTestRenderer({ width: 60, height: 12 });
@@ -27,6 +28,7 @@ async function mount(): Promise<{
     checklist,
     frame: () => setup.captureCharFrame(),
     render: () => setup.renderOnce(),
+    resize: (width: number) => setup.renderer.resize(width, 12),
     dispose: () => setup.renderer.destroy(),
   };
 }
@@ -183,6 +185,28 @@ describe("Checklist", () => {
       // The hint stays to the right of the label on that line.
       const labelIndex = longRow.indexOf("Security Intelligence");
       expect(longRow.indexOf("KB2267602")).toBeGreaterThan(labelIndex);
+    } finally {
+      ui.dispose();
+    }
+  });
+
+  // OpenTUI 0.6 replaced the renderable `resized` event with the `onSizeChange`
+  // hook. Registering the old event still typechecks but throws at runtime, and
+  // the list would keep stale truncation — so resize the pane and look.
+  test("re-truncates labels when the pane is resized", async () => {
+    const ui = await mount();
+    const label = "a-very-long-package-name-that-needs-truncating-in-a-narrow-pane";
+    try {
+      ui.checklist.setRows([{ id: "long", label, checked: true }]);
+      await ui.render();
+      const narrow = ui.frame().split("\n").find((line) => line.includes("a-very-long")) ?? "";
+      expect(narrow).toContain("…");
+
+      ui.resize(120);
+      await ui.render();
+      const wide = ui.frame().split("\n").find((line) => line.includes("a-very-long")) ?? "";
+      expect(wide).toContain(label);
+      expect(wide).not.toContain("…");
     } finally {
       ui.dispose();
     }

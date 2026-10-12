@@ -274,14 +274,34 @@ You cannot drive a TUI by piping stdin — it needs a real terminal. Two layers:
 - **End-to-end:** `scripts/pty-check.ts` spawns the real app on **Bun's built-in
   PTY** (`Bun.spawn(cmd, { terminal: { … } })`, ConPTY on Windows) and watches
   the raw stream for markers. `scripts/pty-exe-check.ts` does the same for the
-  built `dist/updater-tui.exe`. These are manual harnesses (tens of seconds), not
-  part of `bun test`.
+  built `dist/updater-tui.exe`, and `scripts/overlay-exe-check.ts` drives the
+  embedded-terminal overlay **in the exe** — the one feature that mixes a custom
+  renderable with the native renderer, so it is the first thing to break on an
+  OpenTUI upgrade. These are manual harnesses (tens of seconds), not part of
+  `bun test`.
 
 A PTY's output is **diffed** — a static screen emits almost nothing, so don't
 assert on "the screen contains X" there; assert on a marker that implies a
 *change* (a scan line, a result). For frame assertions use the test renderer.
 
 `@xterm/headless` is not needed (and must not be added to app deps).
+
+### OpenTUI 0.6 moved the render tree into native code
+
+The app is on `@opentui/core` 0.6.x. Two changes bit us and are worth knowing:
+
+- **`on("resized")` is gone.** On a non-root renderable it now *throws* ("Native
+  scene does not support resized hooks"), yet it still typechecks — so the tests
+  caught it, the compiler did not. Use the `onSizeChange` hook instead
+  (`this.root.onSizeChange = () => …`); `tests/checklist.test.ts` resizes the
+  renderer and asserts labels re-truncate, which is what would regress.
+- **Frame cells are read through `withBuffers()`.** `buffer.buffers` now throws
+  outside a synchronous scope, and each cell is 4 × `Uint16` (the packing
+  `RGBA` itself uses), not 4 bytes — see the `cell()` helper in
+  `tests/theme.test.ts`.
+
+`EmbeddedTerminalRenderable` and the rest of the imperative core API survive the
+rewrite, in source **and in the compiled exe** (`scripts/overlay-exe-check.ts`).
 
 ---
 
