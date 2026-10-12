@@ -98,8 +98,10 @@ export async function scan(
 
   for (const entry of chosen) events.onScanStart?.(entry.source);
 
-  const raw: UpgradeItem[] = [];
+  const kept: UpgradeItem[] = [];
   const errors: string[] = [];
+  let ignored = 0;
+  let pinned = 0;
 
   // One promise per source, each reporting its own outcome the moment it
   // settles — not after all of them do — so the UI can fill in rows live as
@@ -108,9 +110,15 @@ export async function scan(
     chosen.map(async (entry) => {
       const source = entry.source;
       try {
-        const items = await source.list();
-        raw.push(...items);
-        events.onScanDone?.(source, items);
+        // Apply the config rules per source *before* reporting, so a live
+        // status row counts what the picker will actually show. Ignored items
+        // must not read as "N update(s) available".
+        const listed = await source.list();
+        const applied = applyConfig(listed, engine.config);
+        kept.push(...applied.kept);
+        ignored += applied.ignored;
+        pinned += applied.pinned;
+        events.onScanDone?.(source, applied.kept);
       } catch (err) {
         const detail = message(err);
         errors.push(`${source.title}: ${detail}`);
@@ -119,7 +127,6 @@ export async function scan(
     }),
   );
 
-  const { kept, ignored, pinned } = applyConfig(raw, engine.config);
   return { items: kept, ignored, pinned, errors };
 }
 

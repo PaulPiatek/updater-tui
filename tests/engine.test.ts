@@ -203,6 +203,40 @@ describe("scan", () => {
     expect(result.items.find((entry) => entry.id === "s:b")?.pinned).toBe(true);
   });
 
+  test("onScanDone reports items after config filtering", async () => {
+    // Regression: the UI's live status row counts the items handed to
+    // onScanDone, so ignored packages must not read as "N update(s)".
+    const source = fakeSource({
+      id: "winget",
+      list: async () => [
+        item({ id: "winget:Nadeo.ManiaPlanet", source: "winget", name: "ManiaPlanet" }),
+        item({ id: "winget:Blizzard.BattleNet", source: "winget", name: "Battle.net" }),
+        item({ id: "winget:Keep.Me", source: "winget", name: "Keep" }),
+      ],
+    });
+    const engine = {
+      config: {
+        ignore: ["winget:Nadeo.ManiaPlanet", "winget:Blizzard.BattleNet"],
+        pin: [],
+        scripts: [],
+        files: [],
+        errors: [],
+        userPath: "",
+        projectPath: null,
+      } as never,
+      sources: [{ source, available: true }],
+    };
+
+    const reported: string[] = [];
+    const result = await scan(engine, ["winget"], {
+      onScanDone: (_source, items) => reported.push(...items.map((entry) => entry.id)),
+    });
+
+    expect(reported).toEqual(["winget:Keep.Me"]);
+    expect(result.items.map((entry) => entry.id)).toEqual(["winget:Keep.Me"]);
+    expect(result.ignored).toBe(2);
+  });
+
   test("only scans the requested, available sources", async () => {
     const listed: string[] = [];
     const make = (id: string) =>
