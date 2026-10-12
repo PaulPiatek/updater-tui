@@ -51,6 +51,26 @@ test("matching is case-insensitive and supports ?", () => {
   expect(matchesRule("npm:foo?ar", npmItem("foobar"))).toBe(true);
 });
 
+test("a winget id matches even when its display name differs", () => {
+  // `winget upgrade` prints a display Name ("ManiaPlanet") and a separate Id
+  // ("Nadeo.ManiaPlanet"); the rule uses the Id.
+  const item: UpgradeItem = {
+    id: "winget:Nadeo.ManiaPlanet",
+    source: "winget",
+    name: "ManiaPlanet",
+    current: "1.0.0",
+    latest: "2.0.0",
+  };
+  expect(matchesRule("winget:Nadeo.ManiaPlanet", item)).toBe(true);
+  expect(matchesRule("Nadeo.ManiaPlanet", item)).toBe(true);
+  expect(matchesRule("winget:blizzard.battlenet", {
+    ...item,
+    id: "winget:Blizzard.BattleNet",
+    name: "Battle.net",
+  })).toBe(true);
+  expect(matchesRule("winget:Other.Id", item)).toBe(false);
+});
+
 test("an empty source-prefixed rule matches everything in that source", () => {
   expect(matchesRule("npm:", npmItem("anything"))).toBe(true);
   expect(matchesRule("npm:", wingetItem("Ubuntu"))).toBe(false);

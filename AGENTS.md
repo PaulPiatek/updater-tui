@@ -212,7 +212,11 @@ block). The old `scripts/install.ts` hung once by prompting on a dead stdin.
 - User: `%USERPROFILE%\.config\updater\config.json` (auto-created; `~/.config` elsewhere).
 - Project override: `./updater.config.json`, **per key** (not deep-merged).
 - Keys: `ignore`, `pin`, `scripts`. Rules are `source:pattern` or bare
-  `pattern`, case-insensitive, matched against name, full id, and source id.
+  `pattern`, case-insensitive, matched against the display name, the id both
+  with and without its `source:` prefix, and the source id. The unprefixed id
+  matters because it is not always the display name — winget's `Name` column
+  (`ManiaPlanet`) differs from its `Id` (`Nadeo.ManiaPlanet`), and the rule uses
+  the id (`winget:Nadeo.ManiaPlanet`).
 
 ---
 

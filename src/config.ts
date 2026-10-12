@@ -269,8 +269,16 @@ export function matchesRule(entry: string, item: UpgradeItem): boolean {
   // empty pattern matches nothing (it must not be read as "everything").
   if (sourcePattern !== null && namePattern === "") return true;
 
+  // Match against the display name and the id both with and without its
+  // `source:` prefix. The unprefixed form is what users copy from tools like
+  // `winget upgrade` (e.g. `Nadeo.ManiaPlanet`), which is *not* always the
+  // display name (`ManiaPlanet`), so `winget:Nadeo.ManiaPlanet` must still match.
+  const bareId = item.id.startsWith(`${item.source}:`)
+    ? item.id.slice(item.source.length + 1)
+    : item.id;
+
   const regex = globToRegExp(namePattern);
-  if (regex.test(item.name) || regex.test(item.id)) return true;
+  if (regex.test(item.name) || regex.test(item.id) || regex.test(bareId)) return true;
   // Bare pattern that names a source ("npm") means "everything in that source".
   return sourcePattern === null && regex.test(item.source);
 }
