@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { RGBA } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Checklist, type ChecklistRow } from "../src/ui/checklist";
-import { colors } from "../src/ui/theme";
+import { colors, shimmer } from "../src/ui/theme";
 
 const ROWS: ChecklistRow[] = [
   { id: "group", label: "Group", checked: false, heading: true },
@@ -81,6 +81,16 @@ describe("theme colours", () => {
     for (const [name, color] of Object.entries(colors)) {
       if (color.intent === "default") continue; // scrollTrack: SGR 49
       expect({ name, intent: color.intent }).toEqual({ name, intent: "indexed" });
+      expect(color.slot).toBeGreaterThanOrEqual(0);
+      expect(color.slot).toBeLessThanOrEqual(15);
+    }
+  });
+
+  test("the activity shimmer is palette slots too", () => {
+    // The bottom-bar spinner re-colours itself every other frame; it must stay
+    // terminal-native like everything else.
+    for (const color of shimmer) {
+      expect(color.intent).toBe("indexed");
       expect(color.slot).toBeGreaterThanOrEqual(0);
       expect(color.slot).toBeLessThanOrEqual(15);
     }

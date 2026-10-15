@@ -10,9 +10,12 @@
  */
 import {
   BoxRenderable,
+  StyledText,
   TextRenderable,
+  fg,
   type CliRenderer,
   type KeyEvent,
+  type RGBA,
 } from "@opentui/core";
 import type { UpgradeResult } from "../types";
 import {
@@ -41,7 +44,96 @@ import {
 import { Checklist, type ChecklistRow } from "./checklist";
 import { OutputPane } from "./output";
 import { TerminalOverlay } from "./overlay-terminal";
-import { colors, truncate } from "./theme";
+import { bandRamp, colors, shimmer, truncate } from "./theme";
+
+/** Rotating braille frames for the bottom-bar spinner (~640 ms per cycle). */
+const ACTIVITY_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+/** Spinner tick; the colour shimmer steps every other frame. */
+const ACTIVITY_MS = 80;
+/** Ticks a phrase stays up when several are cycled (≈1.2 s at ACTIVITY_MS). */
+const PHRASE_TICKS = 15;
+/** How long the band takes per character step (one per frame — the fastest the
+ * 80 ms tick can render it). */
+const SNAKE_STEP_MS = ACTIVITY_MS;
+/** The finish burst spins the other way, so it reads as a distinct phase. */
+const BURST_FRAMES = [...ACTIVITY_FRAMES].reverse();
+/** How long the sparkle burst runs before the sweep starts. */
+export const FINISH_BURST_MS = 1_400;
+/** How long the whole finish animation runs before the bar rests. */
+export const FINISH_REST_MS = 10_000;
+
+/**
+ * Which part of a clean finish's animation an *elapsed time* falls in: a
+ * sparkle burst, then the colour snake, then it rests as plain text.
+ *
+ * Timing is wall-clock rather than tick-counted: the 80 ms interval drifts
+ * under render load, so counting ticks could stretch "10 seconds" noticeably.
+ * Exported for testing.
+ */
+export function finishPhase(elapsedMs: number): "burst" | "snake" | "rest" {
+  if (elapsedMs < FINISH_BURST_MS) return "burst";
+  if (elapsedMs < FINISH_REST_MS) return "snake";
+  return "rest";
+}
+
+/** Playful phrases for the bottom activity bar while sources are listed. */
+const SCAN_PHRASES: Record<string, string> = {
+  npm: "sniffing npm",
+  winget: "peeking at winget",
+  store: "browsing the Store",
+  "windows-update": "asking Windows",
+  custom: "reading your scripts",
+};
+
+/** Ditto for the upgrade phase. */
+const UPGRADE_PHRASES: Record<string, string> = {
+  npm: "cooking npm updates",
+  winget: "doing winget updates",
+  store: "cooking store updates",
+  "windows-update": "coaxing Windows Update",
+  custom: "running your scripts",
+};
+
+/** Shown while sources are being discovered, before the picker appears. */
+const DISCOVERING_TEXT = "waking up your sources";
+
+/**
+ * The phrase for a source in one phase, from the tables above. An unknown or
+ * newly added source degrades to a plain label rather than an empty bar.
+ */
+export function activityPhrase(
+  phase: "scan" | "upgrade",
+  id: string,
+  title: string,
+): string {
+  const table = phase === "scan" ? SCAN_PHRASES : UPGRADE_PHRASES;
+  return table[id] ?? `working on ${title.toLowerCase()}`;
+}
+
+/**
+ * Paints `text` with a moving highlight: the `ramp`'s colours, one character
+ * each (tail → bright head), sliding across a `base`-coloured line and wrapping
+ * round at the end.
+ *
+ * Built from native `StyledText` chunks, so the renderer styles each character
+ * itself — the whole sweep is one content swap per tick, with no extra nodes.
+ * Exported for testing.
+ */
+export function snakeText(
+  text: string,
+  phase: number,
+  ramp: readonly RGBA[],
+  base: RGBA,
+): StyledText {
+  const chars = [...text];
+  if (chars.length === 0) return new StyledText([]);
+  return new StyledText(
+    chars.map((char, index) => {
+      const offset = (((index - phase) % chars.length) + chars.length) % chars.length;
+      return fg(offset < ramp.length ? ramp[offset]! : base)(char);
+    }),
+  );
+}
 
 export interface AppOptions {
   cwd?: string;
@@ -57,6 +149,7 @@ export class App {
   private readonly root: BoxRenderable;
   private readonly checklist: Checklist;
   private readonly output: OutputPane;
+  private readonly spinner: TextRenderable;
   private readonly statusText: TextRenderable;
   private readonly hintText: TextRenderable;
 
@@ -67,6 +160,13 @@ export class App {
   private finished = false;
   /** The overlay currently hosting a script, if any. */
   private activeOverlay: TerminalOverlay | null = null;
+  /** Phrases the bottom bar cycles while work is in progress (null = idle). */
+  private workPhrases: string[] | null = null;
+  /** Advances every ACTIVITY_MS; drives both the spinner and the phrase. */
+  private workTick = 0;
+  private workTimer: ReturnType<typeof setInterval> | null = null;
+  /** When the summary went up, for timing the finish animation. */
+  private summaryAt = 0;
   /** Resolves when the app tears itself down (quit or finish). */
   private readonly done: Promise<void>;
   private resolveDone!: () => void;
@@ -90,6 +190,11 @@ export class App {
     const body = new BoxRenderable(renderer, {
       flexDirection: "row",
       flexGrow: 1,
+      // An explicit 0 basis makes the body take only the space left *after* the
+      // status bar. With the default (content-driven) basis the two siblings
+      // shared the shortfall, shrinking the status box below its content height
+      // so its text was drawn over the border.
+      flexBasis: 0,
       gap: 1,
     });
     // Widths come from flex weights rather than a percentage: a `%` width here
@@ -117,13 +222,18 @@ export class App {
     const status = new BoxRenderable(renderer, {
       flexDirection: "row",
       width: "100%",
+      // Never squeeze the bar: it must always keep its one content row (plus
+      // its two border rows).
+      flexShrink: 0,
       borderStyle: "rounded",
       borderColor: colors.border,
       paddingLeft: 1,
       paddingRight: 1,
     });
+    this.spinner = new TextRenderable(renderer, { content: "", fg: colors.muted });
     this.statusText = new TextRenderable(renderer, { content: "", fg: colors.muted });
     this.hintText = new TextRenderable(renderer, { content: "", fg: colors.dim });
+    status.add(this.spinner);
     status.add(this.statusText);
     status.add(new BoxRenderable(renderer, { flexGrow: 1 }));
     status.add(this.hintText);
@@ -145,6 +255,7 @@ export class App {
   // Discovery
   // ---------------------------------------------------------------------------
   private async discoverSources(): Promise<void> {
+    this.startWork([DISCOVERING_TEXT]);
     try {
       const found = await discover({
         cwd: this.options.cwd,
@@ -171,6 +282,10 @@ export class App {
       if (this.finished) return;
       this.output.push("bad", err instanceof Error ? err.message : String(err));
       this.setSummary("Cannot start.");
+    } finally {
+      // The picker (or the error summary) owns the bar once discovery is over.
+      this.stopWork();
+      if (!this.finished) this.refresh();
     }
   }
 
@@ -193,6 +308,13 @@ export class App {
     );
     this.output.showStatus(
       chosen.map((entry) => ({ id: entry.source.id, title: entry.source.title })),
+    );
+    // Sources are scanned concurrently, so the bar cycles their phrases rather
+    // than pretending one of them is "the" current one.
+    this.startWork(
+      chosen.map((entry) =>
+        activityPhrase("scan", entry.source.id, entry.source.title),
+      ),
     );
     this.output.push("step", "Scanning selected sources…");
     this.refresh();
@@ -236,6 +358,7 @@ export class App {
       this.setSummary("Scan failed.");
     } finally {
       this.busy = false;
+      this.stopWork();
       if (!this.finished) this.refresh();
     }
   }
@@ -267,6 +390,10 @@ export class App {
         // The user may have quit while a previous group ran; stop rather than
         // writing to a destroyed render tree.
         if (this.finished) break;
+        // Groups run one after another, so the bar can name the one at work.
+        this.startWork([
+          activityPhrase("upgrade", group.source.id, group.source.title),
+        ]);
         // Sources that print to the terminal themselves (custom scripts) are
         // hosted in an overlay on a pty, so their output streams live and their
         // prompts work without giving up the whole screen.
@@ -298,6 +425,7 @@ export class App {
     }
 
     this.busy = false;
+    this.stopWork();
     // The user may have quit (closing the overlay) while the last script ran,
     // in which case the render tree is gone and must not be touched again.
     if (this.finished) return;
@@ -443,13 +571,18 @@ export class App {
   // ---------------------------------------------------------------------------
   private setSummary(text: string): void {
     this.summary = text;
-    if (!this.finished) this.refresh();
+    if (this.finished) return;
+    // Start a clean finish's animation from frame 0, timed from now.
+    this.workTick = 0;
+    this.summaryAt = Date.now();
+    this.refresh();
   }
 
   private quit(code: number): void {
     if (this.finished) return;
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
+    this.stopWork();
     // Kill any hosted script and remove its overlay before the renderer goes.
     this.activeOverlay?.close();
     this.output.dispose();
@@ -466,6 +599,7 @@ export class App {
     if (this.finished) return;
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
+    this.stopWork();
     this.activeOverlay?.close();
     this.output.dispose();
     this.resolveDone();
@@ -485,12 +619,131 @@ export class App {
       this.checklist.setCursor(current.itemCursor);
     }
 
-    this.statusText.content = truncate(
-      this.summary ?? (this.options.dryRun ? "DRY RUN" : ""),
-      60,
-    );
-    this.statusText.fg = this.summary ? colors.accent : colors.muted;
+    this.renderStatus();
     this.hintText.content = this.hintFor(current);
+    // The status bar animates on its own timer; keep it matched to what is
+    // actually on screen (a phrase, a clean finish, or nothing).
+    this.syncTick();
+  }
+
+  /**
+   * Paints the bottom-left of the status bar: an animated phrase while work is
+   * in progress, an animated summary when a run finished cleanly, and the plain
+   * summary (or the dry-run marker) otherwise.
+   */
+  private renderStatus(): void {
+    const phrase = this.activityLabel();
+    if (phrase !== null) {
+      // The glyph spins every tick; its colour steps every other tick so the
+      // shimmer is a slow pulse rather than a flicker.
+      const frame = this.workTick % ACTIVITY_FRAMES.length;
+      this.spinner.content = `${ACTIVITY_FRAMES[frame]!} `;
+      this.spinner.fg = shimmer[Math.floor(this.workTick / 2) % shimmer.length]!;
+      this.statusText.content = truncate(phrase, 52);
+      this.statusText.fg = colors.text;
+      return;
+    }
+
+    // No phrase: either a summary, or the idle bar (dry runs show a marker).
+    this.spinner.content = "";
+    const summary = this.summary;
+    if (summary === null) {
+      this.statusText.content = truncate(this.options.dryRun ? "DRY RUN" : "", 60);
+      this.statusText.fg = colors.muted;
+      return;
+    }
+
+    const label = truncate(summary, 58);
+    this.statusText.content = label;
+    this.statusText.fg = colors.accent;
+    // A clean finish celebrates; a failure sits still, so an error never looks
+    // like a celebration.
+    if (!this.celebrates()) return;
+
+    const phase = finishPhase(this.finishElapsed());
+    if (phase === "burst") {
+      // A fast, bright spark before the sweep starts: the mark flashes through
+      // the palette every frame (twice as fast as the working spinner).
+      const frame = this.workTick % BURST_FRAMES.length;
+      this.spinner.content = `${BURST_FRAMES[frame]!} `;
+      this.spinner.fg = shimmer[this.workTick % shimmer.length]!;
+      return;
+    }
+    if (phase === "snake") {
+      this.statusText.content = snakeText(
+        label,
+        Math.floor((this.finishElapsed() - FINISH_BURST_MS) / SNAKE_STEP_MS),
+        bandRamp,
+        colors.accent,
+      );
+    }
+    // phase === "rest": the plain summary painted above stays on screen.
+  }
+
+  /** Milliseconds since the summary went up (0 when there is none). */
+  private finishElapsed(): number {
+    return this.summary === null ? 0 : Date.now() - this.summaryAt;
+  }
+
+  /** A clean finish is worth animating; a failure or a bare summary is not. */
+  private celebrates(): boolean {
+    return this.summary !== null && exitCodeFor(this.summary) === 0;
+  }
+
+  /** The phrase to show right now, or null when the bar should be idle. */
+  private activityLabel(): string | null {
+    // A finished run's summary owns the bar until the app closes.
+    if (this.summary) return null;
+    const phrases = this.workPhrases;
+    if (!phrases || phrases.length === 0) return null;
+    const index = Math.floor(this.workTick / PHRASE_TICKS) % phrases.length;
+    return phrases[index] ?? null;
+  }
+
+  /** Starts (or re-points) the activity bar at one or more phrases. */
+  private startWork(phrases: string[]): void {
+    this.workPhrases = phrases.length > 0 ? phrases : ["working…"];
+    this.workTick = 0;
+    this.renderStatus();
+    this.syncTick();
+  }
+
+  /** Clears the activity phrases; `syncTick` decides whether to keep ticking. */
+  private stopWork(): void {
+    this.workPhrases = null;
+    this.workTick = 0;
+    this.syncTick();
+  }
+
+  /** Runs the 80 ms tick exactly while something on the bar is animating. */
+  private syncTick(): void {
+    if (this.finished || !this.isAnimating()) {
+      this.stopTick();
+      return;
+    }
+    if (this.workTimer !== null) return;
+    this.workTimer = setInterval(() => {
+      // A quit may have destroyed the render tree without the timer knowing.
+      if (this.finished) {
+        this.stopTick();
+        return;
+      }
+      this.workTick++;
+      this.renderStatus();
+      if (!this.isAnimating()) this.stopTick();
+    }, ACTIVITY_MS);
+  }
+
+  private stopTick(): void {
+    if (this.workTimer === null) return;
+    clearInterval(this.workTimer);
+    this.workTimer = null;
+  }
+
+  /** Whether the bar still has something to animate (phrase or clean finish). */
+  private isAnimating(): boolean {
+    if (this.workPhrases !== null) return true;
+    return this.celebrates() && finishPhase(this.finishElapsed()) !== "rest";
   }
 
   private sourceRowsFor(state: FlowState): ChecklistRow[] {
@@ -527,7 +780,9 @@ export class App {
 
   private hintFor(state: FlowState): string {
     if (this.summary) return "Enter/q to exit";
-    if (this.busy) return "working…";
+    // While work is running the left-hand phrase says what is happening; a
+    // second "working…" here would just be noise.
+    if (this.busy) return "";
     if (state.stage === "sources") {
       return "↑/↓ move · space toggle · a all/none · Enter scan · q quit";
     }

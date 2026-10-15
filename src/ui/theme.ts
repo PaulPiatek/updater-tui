@@ -42,6 +42,33 @@ export const colors = {
   selectionFg: RGBA.fromIndex(15),
 } as const;
 
+/**
+ * The activity spinner's colour shimmer: accent → magenta → green → magenta.
+ * The glyph rotates continuously while its colour steps every other frame, so
+ * it reads as "alive" without needing a background or a second row.
+ */
+export const shimmer = [
+  RGBA.fromIndex(12),
+  RGBA.fromIndex(13),
+  RGBA.fromIndex(10),
+  RGBA.fromIndex(13),
+];
+
+/**
+ * The finish highlight's colour ramp, ordered tail → head: green → cyan →
+ * magenta → yellow. A single-colour band read as one moving block; a ramp reads
+ * as a comet with a bright leading edge.
+ *
+ * Deliberately excludes the base colour (accent/blue) so the tail never blends
+ * into the text, and slots 0-8 dark enough to vanish on a dark scheme.
+ */
+export const bandRamp = [
+  RGBA.fromIndex(10), // green
+  RGBA.fromIndex(14), // cyan
+  RGBA.fromIndex(13), // magenta
+  RGBA.fromIndex(11), // yellow — the head
+];
+
 /** Truncates to `width` columns, adding an ellipsis when it doesn't fit. */
 export function truncate(value: string, width: number): string {
   if (width <= 0) return "";
