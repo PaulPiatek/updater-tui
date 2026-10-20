@@ -197,6 +197,21 @@ Two behaviours to remember (both handled in `src/sources/store.ts`):
   `Unknown parameter(s): …` and still exits `0`. Parse the output; don't trust
   `$?`.
 
+A third one follows from updating the **Store itself** — the once-in-a-while
+case, verified on 2026-10-20:
+
+- `store.exe` lives inside the package the update replaces, so
+  `store update "Microsoft Store" --apply` downloads and installs, then stops
+  at `Installing: 95%` for ~30 s and **exits `1` with no success or error
+  marker**. The update *did* apply (`22608.1401.7.0` → `22609.1401.5.0`, and
+  `store updates` then says `No updates found.`), so the old code reported a
+  false failure with `Installing: 95%` as the error text.
+- The source therefore confirms an **ambiguous** non-zero run (no `✅`/`❌`, no
+  `error`/`failed` word) with a check-only `store update <id>` (no `--apply`;
+  with no stdin it only prints `Failed to read input in non-interactive mode.`)
+  and treats `already up to date` as success. Any other answer, including an
+  unreadable one, keeps the failure. `tests/store-upgrade.test.ts` pins this.
+
 The `updates` table columns are **Name / Publisher / Version / Date** (verified
 against a real pending update) — the same renderer as `installed`, and with **no
 target-version column**, so `latest` is `"update"` and the picker shows

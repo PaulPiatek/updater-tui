@@ -24,6 +24,12 @@ import { run, which } from "../proc";
  * - Its **exit code is not trustworthy** — an unknown parameter prints
  *   `Unknown parameter(s): …` and still exits `0`. So results are read from the
  *   output (`✅ Installed` / `❌ Cancelled` / `❌ Error`) rather than `$?`.
+ * - Updating the **Store itself** breaks that reporting: `store.exe` lives
+ *   inside the package the update replaces, so the run stops at `Installing:
+ *   95%` and exits `1` with neither marker — the update *worked*, but there is
+ *   no success line (verified: 22608.1401.7.0 → 22609.1401.5.0). An ambiguous
+ *   failure is therefore confirmed with `store update <id>` (no `--apply`,
+ *   hence a check): `already up to date` means it landed.
  */
 const STORE = which("store", "store.exe");
 
@@ -178,6 +184,30 @@ export const looksFailed = (text: string): boolean =>
 export const looksSucceeded = (text: string): boolean =>
   /✅|\binstalled\b|\bupdated\b|already up to date/i.test(text);
 
+/** `store update <id>` (no `--apply`) says whether an update is still pending. */
+const UPDATE_PENDING = /update available for|would you like to apply/i;
+const UPDATE_APPLIED = /already up to date|no update/i;
+
+/**
+ * Asks the StoreCLI whether `key` still has a pending update.
+ *
+ * This is a *check*: without `--apply` the CLI only prompts (and with no stdin
+ * it installs nothing), so it is safe after a failed-looking run. `undefined`
+ * means the answer could not be read, in which case the caller keeps its
+ * original verdict rather than guessing.
+ */
+async function isStillPending(key: string): Promise<boolean | undefined> {
+  try {
+    const res = await run([STORE, "update", key]);
+    const output = clean(`${res.stdout}\n${res.stderr}`);
+    if (UPDATE_APPLIED.test(output)) return false;
+    if (UPDATE_PENDING.test(output)) return true;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Upgrades Microsoft Store apps through the StoreCLI (`store.exe`). */
 export const storeSource: Source = {
   id: "store",
@@ -229,16 +259,26 @@ export const storeSource: Source = {
     const res = await run([STORE, "update", key, "--apply"]);
     const output = clean(`${res.stdout}\n${res.stderr}`);
     const failed = looksFailed(output);
-    const ok = !failed && (looksSucceeded(output) || res.code === 0);
+
+    // A non-zero exit with no marker is ambiguous — that is exactly what a
+    // Store self-update looks like (see the note at the top). Ask the CLI
+    // whether the item is still pending instead of reporting a false failure.
+    const ambiguous = !failed && !looksSucceeded(output) && res.code !== 0;
+    const verified = ambiguous ? await isStillPending(key) : undefined;
+    const ok = !failed && (looksSucceeded(output) || res.code === 0 || verified === false);
+
+    const detail = verified === false
+      ? `${output}${output ? "\n" : ""}✓ verified: store update reports it is already up to date`
+      : output;
 
     return {
       item,
       ok,
       command,
-      output,
+      output: detail,
       error: ok
         ? undefined
-        : output.split("\n").filter(Boolean).slice(-2).join(" ") || `exit code ${res.code}`,
+        : detail.split("\n").filter(Boolean).slice(-2).join(" ") || `exit code ${res.code}`,
     };
   },
 };

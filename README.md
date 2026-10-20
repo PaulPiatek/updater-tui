@@ -284,4 +284,11 @@ output rather than trusting the exit code. Its table is Name / Publisher /
 Version / Date with **no target-version column**, so rows read
 `1.24.11321.0 → update`. `store updates` also prompts to install; under the
 captured (no-stdin) run it installs nothing, and the source never passes
-`--apply` while listing. See `AGENTS.md`.
+`--apply` while listing.
+
+Updating the **Store itself** is the one case where the output cannot be
+trusted either: `store.exe` lives inside the package the update replaces, so
+the run stops at `Installing: 95%` and exits `1` with no success or error line.
+The update still applies (verified: `22608.1401.7.0` → `22609.1401.5.0`), so a
+non-zero run with no marker is confirmed with a check-only
+`store update <id>` — `already up to date` means it landed. See `AGENTS.md`.
