@@ -5,13 +5,16 @@ import { dlopen, FFIType } from "bun:ffi";
  *
  * A prompt UI leaves the console in raw input mode, and Bun's `setRawMode(false)`
  * does NOT restore the original mode — it lands on a different value (0x7),
- * losing flags the console had before. An elevated child (UAC) makes it worse.
- * So instead of guessing, we snapshot the real mode and put it back exactly.
+ * losing flags the console had before. An elevated child (UAC) makes it worse,
+ * and a child can also disable virtual-terminal processing on the output, which
+ * turns the UI's escape sequences into garbage. So instead of guessing, we
+ * snapshot the real modes (input *and* output) and put them back exactly.
  *
- * Everything here is a no-op on non-Windows or when stdin is not a console.
+ * Everything here is a no-op on non-Windows or when the handle is not a console.
  */
 
 const STD_INPUT_HANDLE = -10;
+const STD_OUTPUT_HANDLE = -11;
 
 let api:
   | {
@@ -48,12 +51,12 @@ function loadApi(): typeof api {
   return api;
 }
 
-/** Reads the current console input mode, or null if unavailable. */
-export function getConsoleInputMode(): number | null {
+/** Reads a console mode for `handle`, or null if unavailable. */
+function readMode(handleNumber: number): number | null {
   const ffi = loadApi();
   if (!ffi) return null;
   try {
-    const handle = ffi.getStdHandle(STD_INPUT_HANDLE);
+    const handle = ffi.getStdHandle(handleNumber);
     if (!handle) return null;
     const out = new Uint32Array(1);
     const ok = ffi.getConsoleMode(handle, out);
@@ -63,12 +66,12 @@ export function getConsoleInputMode(): number | null {
   }
 }
 
-/** Writes a console input mode. Returns true on success. */
-export function setConsoleInputMode(mode: number): boolean {
+/** Writes a console mode for `handle`. Returns true on success. */
+function writeMode(handleNumber: number, mode: number): boolean {
   const ffi = loadApi();
   if (!ffi) return false;
   try {
-    const handle = ffi.getStdHandle(STD_INPUT_HANDLE);
+    const handle = ffi.getStdHandle(handleNumber);
     if (!handle) return false;
     return ffi.setConsoleMode(handle, mode) !== 0;
   } catch {
@@ -76,17 +79,39 @@ export function setConsoleInputMode(mode: number): boolean {
   }
 }
 
+/** Reads the current console input mode, or null if unavailable. */
+export function getConsoleInputMode(): number | null {
+  return readMode(STD_INPUT_HANDLE);
+}
+
+/** Writes a console input mode. Returns true on success. */
+export function setConsoleInputMode(mode: number): boolean {
+  return writeMode(STD_INPUT_HANDLE, mode);
+}
+
+/** Reads the current console output mode, or null if unavailable. */
+export function getConsoleOutputMode(): number | null {
+  return readMode(STD_OUTPUT_HANDLE);
+}
+
+/** Writes a console output mode. Returns true on success. */
+export function setConsoleOutputMode(mode: number): boolean {
+  return writeMode(STD_OUTPUT_HANDLE, mode);
+}
+
 /**
- * Runs `fn` after taking a snapshot of the console input mode, restoring that
- * exact mode afterwards — even if the callback spawns a child that changes it.
+ * Runs `fn` after taking a snapshot of the console modes, restoring those exact
+ * modes afterwards — even if the callback spawns a child that changes them.
  */
 export async function withConsoleModeRestored<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
-  const saved = getConsoleInputMode();
+  const savedInput = getConsoleInputMode();
+  const savedOutput = getConsoleOutputMode();
   try {
     return await fn();
   } finally {
-    if (saved !== null) setConsoleInputMode(saved);
+    if (savedInput !== null) setConsoleInputMode(savedInput);
+    if (savedOutput !== null) setConsoleOutputMode(savedOutput);
   }
 }

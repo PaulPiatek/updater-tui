@@ -9,7 +9,9 @@
 import { expect, test } from "bun:test";
 import {
   getConsoleInputMode,
+  getConsoleOutputMode,
   setConsoleInputMode,
+  setConsoleOutputMode,
   withConsoleModeRestored,
 } from "../src/console-mode";
 
@@ -26,8 +28,14 @@ test("withConsoleModeRestored restores on the throw path too", async () => {
 });
 
 test("the mode helpers never throw without a console", () => {
-  const mode = getConsoleInputMode();
-  expect(mode === null || typeof mode === "number").toBe(true);
+  const input = getConsoleInputMode();
+  expect(input === null || typeof input === "number").toBe(true);
   // When there is a console, writing the mode we just read must succeed.
-  if (mode !== null) expect(setConsoleInputMode(mode)).toBe(true);
+  if (input !== null) expect(setConsoleInputMode(input)).toBe(true);
+
+  // The output mode is snapshotted too: a child can disable virtual-terminal
+  // processing, which would leave the UI's escape sequences on screen as text.
+  const output = getConsoleOutputMode();
+  expect(output === null || typeof output === "number").toBe(true);
+  if (output !== null) expect(setConsoleOutputMode(output)).toBe(true);
 });

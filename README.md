@@ -223,8 +223,8 @@ src/
   engine.ts         UI-agnostic engine: discover → scan → apply
   headless.ts       --json / --yes / --dry-run (never loads the TUI)
   state.ts          two-stage selection state (pure, unit-tested)
-  proc.ts           Bun.spawn helper (restores the Windows console mode)
-  console-mode.ts   snapshot/restore of the console input mode
+  proc.ts           Bun.spawn helper (console-less captured children)
+  console-mode.ts   snapshot/restore of the console input + output modes
   config.ts         ignore/pin/scripts from user + project config
   types.ts          UpgradeItem / Source / UpgradeResult
   ui/

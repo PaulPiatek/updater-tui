@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "../types";
 import { run } from "../proc";
-import { withConsoleModeRestored } from "../console-mode";
 
 const POWERSHELL = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe";
 
@@ -207,19 +206,17 @@ async function runBatch(
         `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"`,
       )}`;
 
-    // The elevated (UAC) child can disturb the shared console input mode; it is
-    // captured rather than inherited, so `proc.run` doesn't wrap it — do it here.
-    const res = await withConsoleModeRestored(() =>
-      run([
-        POWERSHELL,
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        launch,
-      ]),
-    );
+    // The elevated (UAC) child can disturb the shared console modes; `proc.run`
+    // snapshots and restores them around every child, captured or not.
+    const res = await run([
+      POWERSHELL,
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      launch,
+    ]);
 
     if (res.code !== 0) {
       throw new Error(res.stderr.trim() || `elevation failed (exit code ${res.code})`);

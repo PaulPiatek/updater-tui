@@ -75,15 +75,28 @@ custom scripts' own `pause`/`input()` — can't read keys.
   Update batch.
 - Bun's `process.stdin.setRawMode(false)` does **not** restore the real mode
   (it lands on `0x7`, losing flags).
-- `console-mode.ts` snapshots the real `GetConsoleMode` value via `bun:ffi` and
-  restores it **exactly** with `SetConsoleMode`.
-- `proc.run()` wraps every `inherit: true` spawn in `withConsoleModeRestored`.
-  The elevated Windows Update batch wraps its captured spawn too (it is not
-  `inherit`, so `proc.run` alone wouldn't cover it).
+- `console-mode.ts` snapshots the real `GetConsoleMode` values via `bun:ffi`
+  (input **and** output) and restores them **exactly** with `SetConsoleMode`.
+- `proc.run()` wraps **every** spawn in `withConsoleModeRestored` — captured ones
+  too, not just `inherit: true`. A captured package manager can still hand our
+  console to an installer.
+- Captured children are spawned through **`node:child_process` with
+  `windowsHide`**, which gives them their own *invisible* console
+  (`CREATE_NO_WINDOW`) — so an installer's progress can't be drawn over the TUI.
+  Both alternatives were measured and are wrong: `Bun.spawn`'s `windowsHide` only
+  hides a window (the child still shares our console, which is how
+  `Starting Stub installer....` ended up scribbling across the status bar — the
+  spinner's 80 ms repaint ate the `S`), and `detached` gives the child a
+  **visible** console window. `node:child_process` can't spawn `.cmd`/`.bat`
+  shims (EINVAL), so those still go through `Bun.spawn` — see `src/proc.ts`.
+- An installer that still grabs the console can leave the input mode broken, so
+  the app looks frozen after a UAC prompt; the mode restore is what saves it.
+  `tests/proc.test.ts` runs a grandchild's `> CON` write on a ConPTY and fails if
+  the marker leaks.
 
-**Keep this.** Whatever UI you build, route inherited children through
-`proc.run()` so the console is restored. Verified: `0x1f7` → `0x1f7` even when a
-child leaves it at raw `0x208`.
+**Keep this.** Whatever UI you build, route children through `proc.run()` so the
+console is restored and captured children can't write to it. Verified: `0x1f7` →
+`0x1f7` even when a child leaves it at raw `0x208`.
 
 ### 3. Custom scripts run in an embedded terminal overlay
 
