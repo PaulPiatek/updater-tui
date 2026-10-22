@@ -441,7 +441,10 @@ test renderer + panel + simulated key, iterated with `bun test`); PTY runs are
 ## Environment
 
 - Windows 11 Pro (current versions), Windows Terminal (PowerShell 7).
-- Bun 1.4.2, Node 24.x.
+- Bun 1.4.3, Node 24.x. (Bun moves fast; check `bun --version` against
+  `winget upgrade --id Oven-sh.Bun` — the winget manifest lags a new release by
+  a day or two, so don't force it with `bun upgrade`, which desyncs the winget
+  record.)
 - Package managers present: `npm`, `winget`, `bun`, `uv`. **No** scoop/choco/
   pipx/cargo/go/gem.
 - `~/.local/bin` is on PATH (uv Python shims, the old `updater.exe`, and now
