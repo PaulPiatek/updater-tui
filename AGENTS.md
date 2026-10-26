@@ -176,6 +176,13 @@ to use, and it is what `src/sources/windows-update.ts` already does. It also
 gives what `UsoClient` cannot: a list with titles/KBs/sizes, per-update results,
 and one elevated batch (one UAC prompt).
 
+Its list script also prints a `{"__list":"windows-update","count":N}` summary
+line after the update records. Without it, "the search ran and found nothing"
+and "the search printed nothing at all" are both zero bytes and an empty list;
+`wu.list` records `count` (from the search) beside `parsed` (from our parse), and
+warns when they disagree. `parseListMarker` reads it, `parseWindowsUpdates`
+ignores it (the line has no `UpdateID`).
+
 #### Microsoft Store uses the StoreCLI (`store.exe`), not a script
 
 Windows 11 ships a supported `store` command inside the Microsoft Store app (an
@@ -232,6 +239,66 @@ not from the exit code.
 Any prompt or wait must check `process.stdin.isTTY` / `process.stdout.isTTY`
 first and no-op when there is no terminal (so `--json`-style and piped use can't
 block). The old `scripts/install.ts` hung once by prompting on a dead stdin.
+
+---
+
+## The diagnostic log (keep it, and keep it cheap)
+
+`src/log.ts` writes one **JSONL file per run** to `%TEMP%\updater-tui\`
+(`updater-<yyyyMMdd-HHmmss>-<pid>.log`), keeping the newest 10 files / 2 MB.
+It is **on by default** at `info`. This exists because of a real report: "a Store
+update did not come back to the app" — and nothing on screen or in the file said
+whether the child hung, the source never decided, or the UI dropped the result.
+
+**Design rule: every awaitable gap gets an entry/exit pair**, so each hypothesis
+is falsifiable from the file alone.
+
+| Lines | Answers |
+| --- | --- |
+| `proc.spawn` → `proc.heartbeat…` → `proc.exit` | did the child come back, and how long into what output did it stop? |
+| `proc.exit` → `store.verdict` / `wu.list {count,parsed}` / `wu.results` / `scan.done` | did the source reach a decision? |
+| `store.verdict` → `engine.result` → `ui.result` | did the result reach the pane? (`ui.result.skipped` = the tree was gone) |
+| `engine.group` → `engine.group.end` | `returned` vs `emitted` — a result produced but never surfaced |
+| `overlay.open` → `proc.spawn(pty)` → `overlay.close` → `ui.hostProcess.resolve` | did the overlay promise settle? |
+| `console.mode {before, disturbed, restored}` | did a child break the console? (rule 2) |
+| `discover.source`, `config.load`, `store.list` (with parser stats), `winget.list` | why wasn't X offered/hidden? "no table" vs "table, 0 rows" |
+
+The parts that actually earned their place:
+
+- **Heartbeats** (5 s, `info`) record `elapsedMs`, `bytesOut`/`bytesErr` and a
+  160-char `tail` while a child is alive — so a hang reads as "stuck at
+  `Installing: 95%`", not "frozen".
+- **`proc.tail`** keeps 400 chars on success and 4 KB on failure — this is what
+turned "exited 1 with no marker" into a diagnosable Store self-update.
+- **`proc.stall`** (180 s, `warn`) repeats and **never kills the child**: a Store
+  self-update sits at 95 % for ~30 s and Windows Update runs for minutes, so an
+  auto-kill would be a new bug.
+
+Rules for using it:
+
+- **Never throw, never write to stdout/stderr** — the TUI owns the screen and
+  `--json` must stay parseable. Callers print `logPath()` themselves (the output
+  pane on a failed summary; stderr for failed headless runs).
+- **One line per event.** JSON escapes `\r`/`\n`, so CRLF progress output can't
+  split an entry; `appendFileSync` means a frozen process still leaves its tail.
+- **Bounded**: fields clip at 8 KB (keep tails, not heads), lines cap at 32 KB,
+  arrays cap at 20. Never dump a whole `npm outdated` payload.
+- **Sources only call `log()` / use `beginProcLog`.** No source grows its own
+  logging, and any new spawn path must still go through `proc.run` (or
+  `beginProcLog` for the pty overlay) so it is covered.
+- Default level for `bun test` is `off` (`NODE_ENV=test`), so tests can neither
+  write to nor prune real logs. Tests opt in with `UPDATER_LOG_DIR` +
+  `setLogLevel(...)`.
+
+Flags/env: `--log <path>`, `--log-level off|debug|info|warn|error`, `--no-log`;
+`UPDATER_LOG_DIR`, `UPDATER_LOG_LEVEL`, `UPDATER_LOG_HEARTBEAT_MS`,
+`UPDATER_LOG_STALL_MS`.
+
+> **Never `rmSync` a path a test did not create.** `rmSync("")` resolves to the
+> current working directory and deletes it recursively — a cleanup helper that
+> took a not-yet-assigned temp path wiped this whole repository once (recovered
+> from the GitHub remote). Cleanup must check `dirname(path) === tmpdir()` and a
+> known basename prefix first, as `cleanup()` in `tests/log.test.ts` does.
 
 ---
 
@@ -467,6 +534,9 @@ Done:
 - [x] Microsoft Store apps as a first-class source via the StoreCLI (`store.exe`)
   — see rule 5. Parses the real Name/Publisher/Version/Date table; the one gap is
   that the CLI exposes no target version, so items read `current → update`.
+- [x] A diagnostic JSONL log in the temp folder, on by default — see "The
+  diagnostic log". Written because a Store update once "did not come back" and
+  the app could not say why, or where.
 
 Not done / deliberately:
 

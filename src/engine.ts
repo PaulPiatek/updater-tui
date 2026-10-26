@@ -9,6 +9,7 @@ import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "./types
 import { createSources, findSource } from "./sources";
 import { applyConfig, loadConfig } from "./config";
 import type { LoadedConfig } from "./config";
+import { log } from "./log";
 
 /** A source plus whether it can run here. */
 export interface AvailableSource {
@@ -49,6 +50,7 @@ export async function discover(options: {
   cwd?: string;
   sourceFilter?: string[];
 } = {}): Promise<Engine> {
+  log("discover.start", { cwd: options.cwd ?? process.cwd(), filter: options.sourceFilter ?? [] });
   const config = await loadConfig(options.cwd);
   const all = createSources(config);
   const filter = options.sourceFilter ?? [];
@@ -62,7 +64,14 @@ export async function discover(options: {
 
   const sources: AvailableSource[] = [];
   for (const source of candidates) {
-    sources.push({ source, available: await source.isAvailable() });
+    const available = await source.isAvailable();
+    sources.push({ source, available });
+    // One line per source: "why wasn't X offered?" is otherwise a guess.
+    log(
+      "discover.source",
+      { src: source.id, title: source.title, available },
+      available ? "info" : "warn",
+    );
   }
 
   if (!sources.some((entry) => entry.available)) {
@@ -74,6 +83,12 @@ export async function discover(options: {
   const unknown = filter.filter((id) => !all.some((source) => source.id === id));
   const warnings =
     unknown.length > 0 ? [`Ignoring unknown source(s): ${unknown.join(", ")}`] : [];
+
+  log("discover.done", {
+    filter,
+    sources: sources.map((entry) => `${entry.source.id}:${entry.available ? "on" : "off"}`),
+    warnings,
+  });
 
   return { config, sources, warnings };
 }
@@ -109,6 +124,8 @@ export async function scan(
   await Promise.all(
     chosen.map(async (entry) => {
       const source = entry.source;
+      const startedAt = performance.now();
+      log("scan.start", { src: source.id });
       try {
         // Apply the config rules per source *before* reporting, so a live
         // status row counts what the picker will actually show. Ignored items
@@ -118,10 +135,27 @@ export async function scan(
         kept.push(...applied.kept);
         ignored += applied.ignored;
         pinned += applied.pinned;
+        log("scan.done", {
+          src: source.id,
+          listed: listed.length,
+          items: applied.kept.length,
+          ignored: applied.ignored,
+          pinned: applied.pinned,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
         events.onScanDone?.(source, applied.kept);
       } catch (err) {
         const detail = message(err);
         errors.push(`${source.title}: ${detail}`);
+        log(
+          "scan.error",
+          {
+            src: source.id,
+            error: detail,
+            elapsedMs: Math.round(performance.now() - startedAt),
+          },
+          "error",
+        );
         events.onScanError?.(source, detail);
       }
     }),
@@ -139,6 +173,31 @@ export async function applyGroup(
   extra: Partial<UpgradeOptions> = {},
 ): Promise<UpgradeResult[]> {
   const opts: UpgradeOptions = { dryRun, ...extra };
+  const startedAt = performance.now();
+  let emitted = 0;
+  const emit = (result: UpgradeResult): void => {
+    emitted++;
+    log(
+      "engine.result",
+      {
+        src: source.id,
+        item: result.item.id,
+        ok: result.ok,
+        error: result.error,
+        command: result.command,
+      },
+      result.ok ? "info" : "warn",
+    );
+    events.onResult?.(result);
+  };
+
+  log("engine.group", {
+    src: source.id,
+    title: source.title,
+    items: items.length,
+    batch: typeof source.upgradeBatch === "function",
+    dryRun,
+  });
 
   // A source that throws (a spawn failure after discovery, say) must not abort
   // the whole run: turn it into failed results so the remaining groups still
@@ -150,15 +209,31 @@ export async function applyGroup(
     error: message(err),
   });
 
+  const finish = (results: UpgradeResult[]): UpgradeResult[] => {
+    // `returned` vs `emitted` is how a result that was produced but never
+    // surfaced (the "did not come back" class of bug) shows up in the log.
+    log(
+      "engine.group.end",
+      {
+        src: source.id,
+        returned: results.length,
+        emitted,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      },
+      results.length === emitted ? "info" : "error",
+    );
+    return results;
+  };
+
   if (source.upgradeBatch) {
     try {
       const results = await source.upgradeBatch(items, opts);
-      for (const result of results) events.onResult?.(result);
-      return results;
+      for (const result of results) emit(result);
+      return finish(results);
     } catch (err) {
       const results = items.map((item) => failed(item, err));
-      for (const result of results) events.onResult?.(result);
-      return results;
+      for (const result of results) emit(result);
+      return finish(results);
     }
   }
 
@@ -171,9 +246,9 @@ export async function applyGroup(
       result = failed(item, err);
     }
     results.push(result);
-    events.onResult?.(result);
+    emit(result);
   }
-  return results;
+  return finish(results);
 }
 
 /** Groups items by their source id, in the order the sources were discovered. */

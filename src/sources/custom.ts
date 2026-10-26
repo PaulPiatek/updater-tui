@@ -6,6 +6,7 @@ import type {
 } from "../types";
 import type { ResolvedScript } from "../config";
 import { run } from "../proc";
+import { log } from "../log";
 
 /** Items produced by this source carry their script in `meta.script`. */
 interface ScriptMeta {
@@ -94,6 +95,23 @@ export function createCustomSource(scripts: ResolvedScript[]): Source {
         return { item, ok: true, command: `(in ${script.cwd}) ${command}` };
       }
 
+      // Which of the three ways this script ran (overlay pty, inherited console,
+      // captured) decides whether its output can even be seen — and argv is
+      // logged verbatim, which is the only record of what a script was given.
+      const host = runOpts.hostProcess
+        ? "overlay"
+        : process.stdin.isTTY === true
+          ? "inherit"
+          : "capture";
+      log("custom.run", {
+        src: "custom",
+        item: item.id,
+        host,
+        cwd: script.cwd,
+        argv,
+        command,
+      });
+
       try {
         // In the TUI the app hosts the process in an overlay and owns the pty;
         // elsewhere (headless, tests) we run it ourselves with the real terminal.
@@ -115,6 +133,7 @@ export function createCustomSource(scripts: ResolvedScript[]): Source {
           error: code === 0 ? undefined : `exit code ${code}`,
         };
       } catch (err) {
+        log("custom.error", { src: "custom", item: item.id, error: err }, "error");
         return { item, ok: false, command, error: errorMessage(err) };
       }
     },

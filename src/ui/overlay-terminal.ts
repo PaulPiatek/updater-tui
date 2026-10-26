@@ -27,6 +27,17 @@ import {
   type KeyEvent,
 } from "@opentui/core";
 import { colors, truncate } from "./theme";
+import { beginProcLog, log } from "../log";
+
+/** Why the overlay went away — recorded so a stuck promise is diagnosable. */
+export type OverlayCloseReason =
+  | "exited"
+  | "esc"
+  | "ctrl+q"
+  | "spawn-failed"
+  | "app-quit"
+  | "app-destroy"
+  | "explicit";
 
 /** How long the exit status stays on screen before the overlay closes. */
 const CLOSE_DELAY_MS = 700;
@@ -47,6 +58,7 @@ export class TerminalOverlay {
   private closed = false;
   /** The child's exit code once it has finished (0 until then). */
   exitCode = 0;
+  private startedAt = 0;
 
   constructor(
     private readonly renderer: CliRenderer,
@@ -121,6 +133,13 @@ export class TerminalOverlay {
 
   /** Runs `argv` on a pty, hosted in the overlay. Resolves with the exit code. */
   async run(argv: string[], options: HostProcessOptions = {}): Promise<number> {
+    this.startedAt = performance.now();
+    log("overlay.open", {
+      phase: "overlay",
+      argv,
+      cwd: options.cwd ?? null,
+      title: options.title ?? null,
+    });
     this.header.content = truncate(`● ${options.title ?? argv[0] ?? "process"}`, 60);
     this.renderer.root.add(this.backdrop);
     this.renderer.requestRender();
@@ -135,13 +154,21 @@ export class TerminalOverlay {
       flexBasis: 0,
       width: "100%",
       // Keys (and terminal query responses) the panel emits go to the child.
-      onData: (data) => this.proc?.terminal?.write(data),
+      onData: (data) => {
+        // Counts only — this is the proof that keys reached the child.
+        log("overlay.input", { chars: data.length }, "debug");
+        this.proc?.terminal?.write(data);
+      },
       // The panel resizes with the overlay; keep the child pty the same size.
       onTerminalResize: (cols, rows) => this.proc?.terminal?.resize(cols, rows),
     });
     this.body.add(this.panel);
 
     let proc: ReturnType<typeof Bun.spawn>;
+    // Hosted children get the same spawn/exit/heartbeat/tail treatment as ones
+    // that go through `proc.run`, so a script that hangs in the overlay is
+    // visible in the log instead of just "nothing happened".
+    const procLog = beginProcLog(argv, "pty", { cwd: options.cwd });
     try {
       proc = Bun.spawn(argv, {
         cwd: options.cwd,
@@ -150,11 +177,13 @@ export class TerminalOverlay {
           rows: 24,
           data: (_terminal: unknown, bytes?: Uint8Array) => {
             const chunk = bytes ?? (_terminal as Uint8Array);
+            procLog.push("out", chunk);
             this.panel?.write(chunk);
           },
         },
       });
     } catch (err) {
+      procLog.failed(err);
       // A spawn failure must still resolve the caller (via onClose) and be
       // reported as a failure, rather than hanging the app on a promise that
       // never settles.
@@ -168,10 +197,11 @@ export class TerminalOverlay {
       } catch {
         // The renderer may already be gone.
       }
-      this.close();
+      this.close("spawn-failed");
       return -1;
     }
     this.proc = proc;
+    procLog.spawned(proc.pid);
 
     this.renderer.requestRender();
     setTimeout(() => {
@@ -184,6 +214,7 @@ export class TerminalOverlay {
     }, 0);
 
     const code = await proc.exited;
+    procLog.exited(code, proc.signalCode ?? null);
     this.exitCode = code;
     if (!this.closed) {
       try {
@@ -194,7 +225,7 @@ export class TerminalOverlay {
         // The app may have been destroyed while the child was exiting.
       }
     }
-    this.close();
+    this.close("exited");
     return code;
   }
 
@@ -208,8 +239,14 @@ export class TerminalOverlay {
     if (!reserved) return;
     key.preventDefault();
     key.stopPropagation();
+    log("overlay.key", {
+      phase: "overlay",
+      name: key.name,
+      ctrl: key.ctrl === true,
+      action: "kill+close",
+    });
     this.kill();
-    this.close();
+    this.close(key.name === "escape" ? "esc" : "ctrl+q");
   };
 
   private kill(): void {
@@ -226,9 +263,20 @@ export class TerminalOverlay {
   }
 
   /** Tears the overlay down. Safe to call more than once. */
-  close(): void {
+  close(reason: OverlayCloseReason = "explicit"): void {
     if (this.closed) return;
     this.closed = true;
+    log(
+      "overlay.close",
+      {
+        phase: "overlay",
+        reason,
+        exitCode: this.exitCode,
+        elapsedMs:
+          this.startedAt === 0 ? null : Math.round(performance.now() - this.startedAt),
+      },
+      reason === "exited" ? "info" : "warn",
+    );
     this.renderer.keyInput.off("keypress", this.onKey);
     this.kill();
     this.panel?.destroyRecursively();

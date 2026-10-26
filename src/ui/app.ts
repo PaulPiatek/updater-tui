@@ -45,6 +45,7 @@ import { Checklist, type ChecklistRow } from "./checklist";
 import { OutputPane } from "./output";
 import { TerminalOverlay } from "./overlay-terminal";
 import { bandRamp, colors, shimmer, truncate } from "./theme";
+import { log, logPath } from "../log";
 
 /** Rotating braille frames for the bottom-bar spinner (~640 ms per cycle). */
 const ACTIVITY_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -167,6 +168,8 @@ export class App {
   private workTimer: ReturnType<typeof setInterval> | null = null;
   /** When the summary went up, for timing the finish animation. */
   private summaryAt = 0;
+  /** Only stage *changes* are logged, so `refresh` can log freely. */
+  private lastStage: FlowState["stage"] | null = null;
   /** Resolves when the app tears itself down (quit or finish). */
   private readonly done: Promise<void>;
   private resolveDone!: () => void;
@@ -380,6 +383,11 @@ export class App {
     this.state = { ...current, stage: "applying" };
     this.output.clearStatus();
     this.refresh();
+    log("ui.upgrade", {
+      items: chosen.length,
+      groups: groupBySource(this.engine, chosen).length,
+      dryRun: this.options.dryRun,
+    });
 
     let ok = 0;
     let failed = 0;
@@ -437,6 +445,11 @@ export class App {
     this.state = { ...this.state, stage: "done" };
     const verb = this.options.dryRun ? "would upgrade" : "upgraded";
     this.setSummary(`Done: ${ok} ${verb}, ${failed} failed.`);
+    log(
+      "ui.upgrade.end",
+      { ok, failed, reboot, dryRun: this.options.dryRun },
+      failed > 0 ? "warn" : "info",
+    );
     this.refresh();
   }
 
@@ -445,11 +458,20 @@ export class App {
     argv: string[],
     options: { cwd?: string; title?: string },
   ): Promise<number> {
+    log("ui.hostProcess.open", {
+      phase: "overlay",
+      argv,
+      cwd: options.cwd ?? null,
+      title: options.title,
+    });
     return new Promise<number>((resolve) => {
       // The overlay calls back when it closes — after the child has exited or
       // the user pressed a reserved key — so the exit code is final by then.
       const overlay = new TerminalOverlay(this.renderer, () => {
         this.activeOverlay = null;
+        // The other half of the pair: open → resolve is what proves the app got
+        // control back from a hosted script.
+        log("ui.hostProcess.resolve", { phase: "overlay", exitCode: overlay.exitCode });
         resolve(overlay.exitCode);
       });
       this.activeOverlay = overlay;
@@ -458,7 +480,21 @@ export class App {
   }
 
   private logResult(result: UpgradeResult): void {
-    if (this.finished) return;
+    if (this.finished) {
+      // The result existed but the render tree was already gone: that is a
+      // different bug from "the source never returned".
+      log(
+        "ui.result.skipped",
+        { item: result.item.id, ok: result.ok, reason: "finished" },
+        "warn",
+      );
+      return;
+    }
+    log(
+      "ui.result",
+      { item: result.item.id, ok: result.ok, error: result.error },
+      result.ok ? "info" : "warn",
+    );
     if (result.ok) {
       this.output.push("good", `${result.item.name}  ${lockedHint(result.item)}`);
     } else {
@@ -480,12 +516,12 @@ export class App {
     if (this.activeOverlay) return;
     if (this.summary) {
       if (key.name === "return" || key.name === "escape" || key.name === "q") {
-        this.quit(exitCodeFor(this.summary));
+        this.quit(exitCodeFor(this.summary), "summary-key");
       }
       return;
     }
     if (key.name === "q") {
-      this.quit(130);
+      this.quit(130, "q");
       return;
     }
     if (this.busy) return;
@@ -497,7 +533,7 @@ export class App {
         this.state = { ...current, stage: "sources" };
         this.refresh();
       } else {
-        this.quit(130);
+        this.quit(130, key.ctrl ? "ctrl+c" : "escape");
       }
       return;
     }
@@ -571,20 +607,27 @@ export class App {
   // ---------------------------------------------------------------------------
   private setSummary(text: string): void {
     this.summary = text;
+    const code = exitCodeFor(text);
+    log("ui.summary", { summary: text, exitCode: code }, code === 0 ? "info" : "warn");
     if (this.finished) return;
+    // A failed run is the one worth diagnosing later, so say where the log is.
+    // (It is an output line, not part of the summary bar, which truncates.)
+    const file = code !== 0 ? logPath() : null;
+    if (file) this.output.push("info", `log: ${file}`);
     // Start a clean finish's animation from frame 0, timed from now.
     this.workTick = 0;
     this.summaryAt = Date.now();
     this.refresh();
   }
 
-  private quit(code: number): void {
+  private quit(code: number, reason = "unknown"): void {
     if (this.finished) return;
+    log("ui.quit", { code, reason });
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
     this.stopWork();
     // Kill any hosted script and remove its overlay before the renderer goes.
-    this.activeOverlay?.close();
+    this.activeOverlay?.close("app-quit");
     this.output.dispose();
     this.exitCode = code;
     this.renderer.destroy();
@@ -597,16 +640,21 @@ export class App {
   /** Detaches the UI and resolves any pending `run()`. Safe to call twice. */
   destroy(): void {
     if (this.finished) return;
+    log("ui.destroy");
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
     this.stopWork();
-    this.activeOverlay?.close();
+    this.activeOverlay?.close("app-destroy");
     this.output.dispose();
     this.resolveDone();
   }
 
   private refresh(): void {
     const current = this.state;
+    if (current.stage !== this.lastStage) {
+      this.lastStage = current.stage;
+      log("ui.stage", { stage: current.stage });
+    }
     this.checklist.setTitle(current.stage === "sources" ? "Sources" : "Packages");
 
     if (current.stage === "sources") {

@@ -1,5 +1,6 @@
 import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "../types";
 import { run, which } from "../proc";
+import { clip, log, tailOf } from "../log";
 
 /**
  * Microsoft Store apps, via the StoreCLI that ships inside the Microsoft Store
@@ -64,6 +65,18 @@ const AVAILABLE_HEADERS = [
 ];
 const STATE_HEADERS = ["state", "status"];
 
+/** What the header-driven parser saw, so "no table" and "0 rows" differ. */
+export interface StoreParseStats {
+  tables: number;
+  headerRow: number | null;
+  tableLines: number;
+  rowLines: number;
+  continuations: number;
+  rows: number;
+  skippedUpToDate: number;
+  columns: string[];
+}
+
 /**
  * Parses the table(s) printed by `store updates` into upgrade items.
  *
@@ -77,8 +90,13 @@ const STATE_HEADERS = ["state", "status"];
  *
  * Columns are matched case-insensitively, so a renamed or reordered column
  * degrades to a sensible default instead of breaking. Exported for testing.
+ *
+ * `stats` is filled in when the caller wants the parse recorded in the log.
  */
-export function parseStoreUpdates(output: string): UpgradeItem[] {
+export function parseStoreUpdates(
+  output: string,
+  stats?: StoreParseStats,
+): UpgradeItem[] {
   const lines = stripAnsi(output).replace(/\r\n?/g, "\n").split("\n");
 
   const items: UpgradeItem[] = [];
@@ -92,6 +110,11 @@ export function parseStoreUpdates(output: string): UpgradeItem[] {
   let versionIndex = -1;
   let availableIndex = -1;
   let stateIndex = -1;
+  let tables = 0;
+  let headerRow: number | null = null;
+  let lineIndex = 0;
+  let continuations = 0;
+  let skippedUpToDate = 0;
 
   const cell = (cells: string[], index: number): string =>
     index >= 0 ? (cells[index] ?? "").trim() : "";
@@ -102,7 +125,10 @@ export function parseStoreUpdates(output: string): UpgradeItem[] {
       const name = cell(cells, nameIndex);
       if (!name) continue;
       // Defensive: if the list ever includes up-to-date apps, don't offer them.
-      if (stateIndex >= 0 && UP_TO_DATE.test(cell(cells, stateIndex))) continue;
+      if (stateIndex >= 0 && UP_TO_DATE.test(cell(cells, stateIndex))) {
+        skippedUpToDate++;
+        continue;
+      }
 
       // Prefer the product id for the item id and the upgrade key when the
       // table exposes one, so two apps sharing a display name stay distinct.
@@ -124,13 +150,28 @@ export function parseStoreUpdates(output: string): UpgradeItem[] {
     }
   };
 
-  for (const rawLine of lines) {
+  const record = (): void => {
+    if (!stats) return;
+    stats.tables = tables;
+    stats.headerRow = header ? headerRow : null;
+    stats.rowLines = rows.length;
+    stats.rows = items.length;
+    stats.continuations = continuations;
+    stats.skippedUpToDate = skippedUpToDate;
+    stats.columns = header ?? [];
+  };
+
+  for (const [index, rawLine] of lines.entries()) {
+    lineIndex = index;
     const line = rawLine.trim();
     if (!line.startsWith("│")) continue;
+    if (stats) stats.tableLines++;
 
     const cells = splitCells(line);
     if (cells.some((value) => NAME_HEADERS.includes(value.toLowerCase()))) {
       emit();
+      tables++;
+      headerRow = lineIndex + 1;
       header = cells;
       rows = [];
       const column = (names: string[]): number =>
@@ -157,6 +198,7 @@ export function parseStoreUpdates(output: string): UpgradeItem[] {
       : (cells[nameIndex] ?? "") === "";
 
     if (previous && isContinuation) {
+      continuations++;
       for (let i = 0; i < header.length; i++) {
         const value = cells[i] ?? "";
         if (!value) continue;
@@ -168,6 +210,7 @@ export function parseStoreUpdates(output: string): UpgradeItem[] {
   }
 
   emit();
+  record();
   return items;
 }
 
@@ -200,10 +243,24 @@ async function isStillPending(key: string): Promise<boolean | undefined> {
   try {
     const res = await run([STORE, "update", key]);
     const output = clean(`${res.stdout}\n${res.stderr}`);
-    if (UPDATE_APPLIED.test(output)) return false;
-    if (UPDATE_PENDING.test(output)) return true;
+    const applied = UPDATE_APPLIED.test(output);
+    const pending = UPDATE_PENDING.test(output);
+    log(
+      "store.verify",
+      {
+        src: "store",
+        key,
+        code: res.code,
+        match: applied ? "applied" : pending ? "pending" : "unreadable",
+        tail: tailOf(output, 300),
+      },
+      applied || pending ? "info" : "warn",
+    );
+    if (applied) return false;
+    if (pending) return true;
     return undefined;
-  } catch {
+  } catch (err) {
+    log("store.verify.error", { src: "store", key, error: err }, "warn");
     return undefined;
   }
 }
@@ -231,17 +288,50 @@ export const storeSource: Source = {
     // prompts for confirmation anyway. With no stdin it leaves everything alone.
     const res = await run([STORE, "updates"]);
     const output = clean(`${res.stdout}\n${res.stderr}`);
+    const noUpdates = /no updates found/i.test(output);
 
-    if (/no updates found/i.test(output)) return [];
+    const stats: StoreParseStats = {
+      tables: 0,
+      headerRow: null,
+      tableLines: 0,
+      rowLines: 0,
+      continuations: 0,
+      rows: 0,
+      skippedUpToDate: 0,
+      columns: [],
+    };
+    const items = noUpdates ? [] : parseStoreUpdates(output, stats);
 
-    const items = parseStoreUpdates(output);
+    // The parser's view of the output, so "no table found" (wrong output) and
+    // "table found, 0 rows" (wrong columns) are distinguishable afterwards.
+    log(
+      "store.list",
+      {
+        src: "store",
+        code: res.code,
+        chars: output.length,
+        noUpdates,
+        items: items.length,
+        ...stats,
+      },
+      items.length > 0 || noUpdates ? "info" : "warn",
+    );
+
+    if (noUpdates) return [];
+
     if (items.length > 0) return items;
 
     // No table and no "no updates" marker: surface the raw output rather than
     // silently reporting "nothing to do".
     if (res.code !== 0 || looksFailed(output)) {
       const snippet = output.split("\n").filter(Boolean).slice(-3).join(" ");
-      throw new Error(snippet || `store updates exited with code ${res.code}`);
+      const error = snippet || `store updates exited with code ${res.code}`;
+      log(
+        "store.list.error",
+        { src: "store", code: res.code, error, tail: tailOf(output, 2_048) },
+        "error",
+      );
+      throw new Error(error);
     }
     return [];
   },
@@ -259,13 +349,34 @@ export const storeSource: Source = {
     const res = await run([STORE, "update", key, "--apply"]);
     const output = clean(`${res.stdout}\n${res.stderr}`);
     const failed = looksFailed(output);
+    const succeeded = looksSucceeded(output);
 
     // A non-zero exit with no marker is ambiguous — that is exactly what a
     // Store self-update looks like (see the note at the top). Ask the CLI
     // whether the item is still pending instead of reporting a false failure.
-    const ambiguous = !failed && !looksSucceeded(output) && res.code !== 0;
+    const ambiguous = !failed && !succeeded && res.code !== 0;
     const verified = ambiguous ? await isStillPending(key) : undefined;
-    const ok = !failed && (looksSucceeded(output) || res.code === 0 || verified === false);
+    const ok = !failed && (succeeded || res.code === 0 || verified === false);
+
+    // The exact branch that decided the verdict: `verified` is a tri-state, and
+    // "unreadable" (null) must stay distinguishable from "false" (done).
+    log(
+      "store.verdict",
+      {
+        src: "store",
+        item: item.id,
+        key,
+        code: res.code,
+        failed,
+        succeeded,
+        ambiguous,
+        verified: verified ?? null,
+        ok,
+        chars: output.length,
+        tail: ok ? undefined : tailOf(output, 1_024),
+      },
+      ok ? "info" : "warn",
+    );
 
     const detail = verified === false
       ? `${output}${output ? "\n" : ""}✓ verified: store update reports it is already up to date`
@@ -275,7 +386,7 @@ export const storeSource: Source = {
       item,
       ok,
       command,
-      output: detail,
+      output: clip(detail),
       error: ok
         ? undefined
         : detail.split("\n").filter(Boolean).slice(-2).join(" ") || `exit code ${res.code}`,

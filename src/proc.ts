@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { withConsoleModeRestored } from "./console-mode";
+import { beginProcLog } from "./log";
 
 export interface RunResult {
   code: number;
@@ -21,12 +22,34 @@ export interface RunOptions {
 const isShim = (command: string): boolean =>
   process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
 
-/** Drains a child stream to a string. */
-async function readAll(stream: NodeJS.ReadableStream | null): Promise<string> {
+/**
+ * Drains a child stream to a string, reporting each chunk as it arrives so the
+ * diagnostic log can keep a rolling tail and byte count (see `log.ts`).
+ */
+async function readAll(
+  stream: NodeJS.ReadableStream | null,
+  onChunk?: (bytes: Uint8Array) => void,
+): Promise<string> {
   if (!stream) return "";
   const chunks: Uint8Array[] = [];
   for await (const chunk of stream) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Uint8Array));
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Uint8Array);
+    onChunk?.(bytes);
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Ditto for a web stream, which is what `Bun.spawn` hands back. */
+async function readWeb(
+  stream: ReadableStream<Uint8Array> | null | undefined,
+  onChunk?: (bytes: Uint8Array) => void,
+): Promise<string> {
+  if (!stream) return "";
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream as AsyncIterable<Uint8Array>) {
+    onChunk?.(chunk);
+    chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString("utf8");
 }
@@ -61,14 +84,28 @@ export async function run(
       // A child that takes over the console (especially an elevated one via UAC)
       // can leave the shared console input mode in a broken state. Snapshot it
       // before and restore it exactly afterwards — see console-mode.ts.
-      const proc = Bun.spawn(cmd, {
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-        cwd: options.cwd,
-      });
-      const code = await proc.exited;
-      return { code, stdout: "", stderr: "" };
+      const procLog = beginProcLog(cmd, "inherit", { cwd: options.cwd });
+      let proc: ReturnType<typeof Bun.spawn>;
+      try {
+        proc = Bun.spawn(cmd, {
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+          cwd: options.cwd,
+        });
+      } catch (err) {
+        procLog.failed(err);
+        throw err;
+      }
+      procLog.spawned(proc.pid);
+      try {
+        const code = await proc.exited;
+        procLog.exited(code, null);
+        return { code, stdout: "", stderr: "" };
+      } catch (err) {
+        procLog.failed(err);
+        throw err;
+      }
     }
 
     const [program, ...args] = cmd;
@@ -76,36 +113,68 @@ export async function run(
     if (program !== undefined && isShim(program)) {
       // Bun runs the shim through cmd.exe for us; it shares our console, which
       // is tolerable (the package managers we call this way don't hand it on).
-      const proc = Bun.spawn(cmd, {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-        cwd: options.cwd,
-        windowsHide: true,
-      });
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      const code = await proc.exited;
-      return { code, stdout, stderr };
+      const procLog = beginProcLog(cmd, "bun-shim", { cwd: options.cwd });
+      let proc: ReturnType<typeof Bun.spawn>;
+      try {
+        proc = Bun.spawn(cmd, {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+          cwd: options.cwd,
+          windowsHide: true,
+        });
+      } catch (err) {
+        procLog.failed(err);
+        throw err;
+      }
+      procLog.spawned(proc.pid);
+      try {
+        const [stdout, stderr] = await Promise.all([
+          readWeb(proc.stdout as ReadableStream<Uint8Array> | undefined, (bytes) =>
+            procLog.push("out", bytes),
+          ),
+          readWeb(proc.stderr as ReadableStream<Uint8Array> | undefined, (bytes) =>
+            procLog.push("err", bytes),
+          ),
+        ]);
+        const code = await proc.exited;
+        procLog.exited(code, proc.signalCode ?? null, stdout, stderr);
+        return { code, stdout, stderr };
+      } catch (err) {
+        procLog.failed(err);
+        throw err;
+      }
     }
 
-    const child = nodeSpawn(program ?? "", args, {
-      cwd: options.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    const [stdout, stderr, code] = await Promise.all([
-      readAll(child.stdout),
-      readAll(child.stderr),
-      new Promise<number>((resolve, reject) => {
-        child.once("error", reject);
-        // "close" (not "exit") is what guarantees the pipes above are drained.
-        child.once("close", (exitCode) => resolve(exitCode ?? -1));
-      }),
-    ]);
-    return { code, stdout, stderr };
+    const procLog = beginProcLog(cmd, "node-children", { cwd: options.cwd });
+    let child: ReturnType<typeof nodeSpawn>;
+    try {
+      child = nodeSpawn(program ?? "", args, {
+        cwd: options.cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (err) {
+      procLog.failed(err);
+      throw err;
+    }
+    procLog.spawned(child.pid);
+    try {
+      const [stdout, stderr, code] = await Promise.all([
+        readAll(child.stdout, (bytes) => procLog.push("out", bytes)),
+        readAll(child.stderr, (bytes) => procLog.push("err", bytes)),
+        new Promise<number>((resolve, reject) => {
+          child.once("error", reject);
+          // "close" (not "exit") is what guarantees the pipes above are drained.
+          child.once("close", (exitCode) => resolve(exitCode ?? -1));
+        }),
+      ]);
+      procLog.exited(code, child.signalCode ?? null, stdout, stderr);
+      return { code, stdout, stderr };
+    } catch (err) {
+      procLog.failed(err);
+      throw err;
+    }
   });
 }
 

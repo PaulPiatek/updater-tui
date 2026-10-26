@@ -78,8 +78,32 @@ and neither flag, the app prints a clear message and exits `2` instead of hangin
 | `--yes`         | `-y`  | Skip the pickers and upgrade everything                |
 | `--json`        |       | Print the upgradable items as JSON and exit (no TUI)   |
 | `--source <id>` |       | Only use this source (repeatable)                      |
+| `--log <path>`  |       | Write the diagnostic log here                          |
+| `--log-level`   |       | `off`, `debug`, `info` (default), `warn`, `error`      |
+| `--no-log`      |       | Do not write a log                                     |
 | `--help`        | `-h`  | Show help                                              |
 | `--version`     | `-v`  | Show the version                                       |
+
+### Diagnostics
+
+Every run writes a JSONL log to `%TEMP%\updater-tui\updater-<stamp>-<pid>.log`
+(the newest 10 files are kept). It records every child process with heartbeats
+and an output tail, the decision each source reached, and whether the result
+reached the UI — which is what makes "the Store update never came back"
+answerable instead of a guess. It is on by default; `--no-log` turns it off and
+`--log-level debug` adds console-mode and keystroke-count detail. A failed TUI
+run prints the path in the output pane; a failed `--json`/`--yes` run prints it
+to stderr.
+
+```sh
+# the last run's child processes, in order
+jq -c 'select(.event|startswith("proc."))' "$TEMP"/updater-tui/"$(ls -t "$TEMP/updater-tui" | head -1)"
+```
+
+```powershell
+Get-Content (Get-ChildItem $env:TEMP\updater-tui\*.log | Sort-Object LastWriteTime -Descending)[0] |
+  ConvertFrom-Json | Where-Object event -like 'proc.*' | Format-Table mono,event,style,code,elapsedMs
+```
 
 ### Exit codes
 
@@ -225,6 +249,7 @@ src/
   state.ts          two-stage selection state (pure, unit-tested)
   proc.ts           Bun.spawn helper (console-less captured children)
   console-mode.ts   snapshot/restore of the console input + output modes
+  log.ts            diagnostic JSONL log (heartbeats, verdicts, tails)
   config.ts         ignore/pin/scripts from user + project config
   types.ts          UpgradeItem / Source / UpgradeResult
   ui/
@@ -245,6 +270,7 @@ scripts/
   install.ts        installs the built exe into ~/.local/bin
   pty-check.ts      drives the app over a PTY (manual)
   pty-exe-check.ts  drives the built exe over a PTY (manual)
+  overlay-exe-check.ts  drives the embedded terminal overlay in the exe (manual)
 assets/
   icon.ico          app icon (generated)
 tests/              bun:test unit + frame tests

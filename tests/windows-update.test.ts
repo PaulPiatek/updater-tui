@@ -3,6 +3,7 @@ import {
   buildInstallScript,
   formatSize,
   parseInstallResults,
+  parseListMarker,
   parseWindowsUpdates,
 } from "../src/sources/windows-update";
 
@@ -53,6 +54,31 @@ test("parses multiple updates and multiple KB ids", () => {
 test("ignores stray non-JSON lines and empty input", () => {
   expect(parseWindowsUpdates("")).toEqual([]);
   expect(parseWindowsUpdates("WARNING: something noisy\n")).toEqual([]);
+});
+
+/** The summary line LIST_SCRIPT appends after the update records. */
+const marker = (count: number): string =>
+  JSON.stringify({ __list: "windows-update", count });
+
+test("the summary marker is not mistaken for an update", () => {
+  const items = parseWindowsUpdates(`${DEFENDER_LINE}\n${marker(1)}\n`);
+  expect(items.map((item) => item.name)).toHaveLength(1);
+  expect(items[0]!.id).toContain("9a788d9c");
+});
+
+test("reads the summary marker, including a zero count", () => {
+  // The distinction that matters: 0 means "the search ran and found nothing",
+  // null means "the search printed no summary at all".
+  expect(parseListMarker(marker(0))).toBe(0);
+  expect(parseListMarker(marker(3))).toBe(3);
+  expect(parseListMarker(`${DEFENDER_LINE}\n${marker(1)}`)).toBe(1);
+  // ConvertTo-Json wraps a one-element collection in an array.
+  expect(parseListMarker(`[${marker(2)}]`)).toBe(2);
+  // Missing, unreadable, or a bare update record: no marker.
+  expect(parseListMarker("")).toBeNull();
+  expect(parseListMarker(DEFENDER_LINE)).toBeNull();
+  expect(parseListMarker("WARNING: noisy\n{not json}\n")).toBeNull();
+  expect(parseListMarker('{"__list":"windows-update","count":"many"}')).toBeNull();
 });
 
 test("omits the hint when there is no KB or size", () => {

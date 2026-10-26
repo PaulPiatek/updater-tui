@@ -1,4 +1,5 @@
 import { dlopen, FFIType } from "bun:ffi";
+import { log } from "./log";
 
 /**
  * Windows console-mode helpers.
@@ -99,9 +100,17 @@ export function setConsoleOutputMode(mode: number): boolean {
   return writeMode(STD_OUTPUT_HANDLE, mode);
 }
 
+/** `0x1f7`-style formatting; null when the handle is not a console. */
+const hex = (mode: number | null): string | null =>
+  mode === null ? null : `0x${mode.toString(16)}`;
+
 /**
  * Runs `fn` after taking a snapshot of the console modes, restoring those exact
  * modes afterwards — even if the callback spawns a child that changes them.
+ *
+ * It also records what the child left behind (`console.mode`), because a mode
+ * that had to be repaired is the one clue that a run "froze" on a console
+ * problem rather than on an update.
  */
 export async function withConsoleModeRestored<T>(
   fn: () => Promise<T>,
@@ -111,7 +120,26 @@ export async function withConsoleModeRestored<T>(
   try {
     return await fn();
   } finally {
+    const disturbedInput = getConsoleInputMode();
+    const disturbedOutput = getConsoleOutputMode();
     if (savedInput !== null) setConsoleInputMode(savedInput);
     if (savedOutput !== null) setConsoleOutputMode(savedOutput);
+
+    if (savedInput !== null || savedOutput !== null) {
+      const disturbed =
+        disturbedInput !== savedInput || disturbedOutput !== savedOutput;
+      log(
+        "console.mode",
+        {
+          before: { input: hex(savedInput), output: hex(savedOutput) },
+          disturbed: { input: hex(disturbedInput), output: hex(disturbedOutput) },
+          restored: {
+            input: hex(getConsoleInputMode()),
+            output: hex(getConsoleOutputMode()),
+          },
+        },
+        disturbed ? "warn" : "debug",
+      );
+    }
   }
 }

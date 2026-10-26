@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "../types";
 import { run } from "../proc";
+import { log, tailOf } from "../log";
 
 const POWERSHELL = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe";
 
@@ -31,7 +32,14 @@ foreach ($u in $result.Updates) {
     Downloaded = $u.IsDownloaded
     RebootBehavior = $u.InstallationBehavior.RebootBehavior
   } | ConvertTo-Json -Compress -Depth 4
-}`;
+}
+# A summary line, so "the search found nothing" and "the search printed
+# nothing" are distinguishable — otherwise both are 0 bytes of output plus an
+# empty item list. Read by parseListMarker; skipped by parseWindowsUpdates.
+[pscustomobject]@{
+  __list = 'windows-update'
+  count = @($result.Updates).Count
+} | ConvertTo-Json -Compress`;
 
 interface WuRecord {
   UpdateID?: unknown;
@@ -61,6 +69,9 @@ const stripBom = (text: string): string => text.replace(/^\uFEFF/, "");
 /**
  * Parses the JSON-lines emitted by `LIST_SCRIPT` into upgrade items. Exported
  * for unit testing.
+ *
+ * The final `__list` summary line carries no `UpdateID`, so it is skipped here;
+ * see `parseListMarker` for the count it reports.
  */
 export function parseWindowsUpdates(stdout: string): UpgradeItem[] {
   const text = stripBom(stdout).trim();
@@ -114,6 +125,36 @@ export function parseWindowsUpdates(stdout: string): UpgradeItem[] {
   }
 
   return items;
+}
+
+/**
+ * The update count `LIST_SCRIPT` reports on its summary line, or `null` when
+ * that line is missing (truncated output, or a script that failed before it).
+ *
+ * This is what makes "no pending updates" distinguishable from "the search
+ * produced nothing": both used to be zero bytes plus an empty list. Exported
+ * for testing.
+ */
+export function parseListMarker(stdout: string): number | null {
+  for (const rawLine of stripBom(stdout).split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.startsWith("{") && !line.startsWith("[")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    // `ConvertTo-Json` sometimes wraps a single-element collection in an array.
+    for (const candidate of Array.isArray(parsed) ? parsed : [parsed]) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const record = candidate as Record<string, unknown>;
+      if (record.__list !== "windows-update") continue;
+      const count = Number(record.count);
+      if (Number.isFinite(count)) return count;
+    }
+  }
+  return null;
 }
 
 /** Parses the result JSON written by the elevated install script. */
@@ -193,6 +234,17 @@ async function runBatch(
     .map((item) => String(item.meta?.updateId ?? ""))
     .filter((id) => id.length > 0);
 
+  // The elevated batch is the least observable path in the app (its own
+  // console, results via a temp file), so record the files and what came back.
+  log("wu.batch", {
+    src: "windows-update",
+    items: items.length,
+    ids,
+    scriptPath,
+    resultPath,
+    elevated: true,
+  });
+
   try {
     await Bun.write(scriptPath, buildInstallScript(ids, resultPath));
 
@@ -223,9 +275,20 @@ async function runBatch(
     }
 
     const resultFile = Bun.file(resultPath);
-    const records = (await resultFile.exists())
-      ? parseInstallResults(await resultFile.text())
-      : [];
+    const found = await resultFile.exists();
+    const records = found ? parseInstallResults(await resultFile.text()) : [];
+    log(
+      "wu.results",
+      {
+        src: "windows-update",
+        code: res.code,
+        resultFileFound: found,
+        records: records.length,
+        ids,
+        tail: tailOf(res.stdout || res.stderr, 512),
+      },
+      records.length === ids.length ? "info" : "warn",
+    );
 
     return items.map((item): UpgradeResult => {
       const updateId = String(item.meta?.updateId ?? "");
@@ -251,6 +314,7 @@ async function runBatch(
       };
     });
   } catch (err) {
+    log("wu.error", { src: "windows-update", error: err, ids }, "error");
     return items.map((item) => ({ item, ok: false, command, error: errorMessage(err) }));
   } finally {
     await rm(scriptPath, { force: true }).catch(() => {});
@@ -282,7 +346,23 @@ export const windowsUpdateSource: Source = {
     if (res.code !== 0) {
       throw new Error(res.stderr.trim() || `Windows Update search failed (exit ${res.code})`);
     }
-    return parseWindowsUpdates(res.stdout);
+
+    const items = parseWindowsUpdates(res.stdout);
+    const count = parseListMarker(res.stdout);
+    // `count` is what the search said it found; `parsed` is what we could read
+    // out of it. Equal — including equal-and-zero — is the healthy case.
+    log(
+      "wu.list",
+      {
+        src: "windows-update",
+        code: res.code,
+        chars: res.stdout.length,
+        count,
+        parsed: items.length,
+      },
+      count === items.length ? "info" : "warn",
+    );
+    return items;
   },
 
   upgrade(item, opts) {

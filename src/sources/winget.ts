@@ -1,5 +1,6 @@
 import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "../types";
 import { run, which } from "../proc";
+import { log } from "../log";
 
 const WINGET = which("winget", "winget.exe");
 
@@ -110,6 +111,19 @@ export const wingetSource: Source = {
     ]);
 
     const items = parseWingetUpgrade(res.stdout);
+    // `…` means the console was too narrow to fit an Id, so that row is a
+    // guaranteed failure later — worth knowing before the upgrade runs.
+    log(
+      "winget.list",
+      {
+        src: "winget",
+        code: res.code,
+        chars: res.stdout.length,
+        items: items.length,
+        truncatedRows: (res.stdout.match(/…/g) ?? []).length,
+      },
+      items.length > 0 ? "info" : "warn",
+    );
     if (items.length === 0 && res.code !== 0) {
       throw new Error(res.stderr.trim() || `winget upgrade exited with code ${res.code}`);
     }

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { UpgradeItem } from "./types";
+import { log } from "./log";
 
 /** A custom executable the user wants to run as part of an update. */
 export interface CustomScript {
@@ -199,7 +200,7 @@ export async function loadConfigFiles(paths: { user: string; project: string }):
       ? dirname(paths.project)
       : dirname(paths.user);
 
-  return {
+  const loaded: LoadedConfig = {
     ignore: projectRead.config?.ignore ?? userRead.config?.ignore ?? [],
     pin: projectRead.config?.pin ?? userRead.config?.pin ?? [],
     scripts: scripts.map((script) => resolveScript(script, scriptsDir)),
@@ -208,6 +209,30 @@ export async function loadConfigFiles(paths: { user: string; project: string }):
     userPath: paths.user,
     projectPath: projectRead.config ? paths.project : null,
   };
+
+  // Which files were read, which rules are in force, and the resolved scripts:
+  // "why wasn't X hidden / offered?" is answerable from this line alone.
+  log(
+    "config.load",
+    {
+      user: paths.user,
+      project: paths.project,
+      files,
+      errors,
+      ignore: loaded.ignore,
+      pin: loaded.pin,
+      scripts: loaded.scripts.map((script) => ({
+        name: script.name,
+        path: script.path,
+        cwd: script.cwd,
+        interpreter: script.interpreter ?? null,
+        args: script.args,
+      })),
+    },
+    errors.length > 0 ? "warn" : "info",
+  );
+
+  return loaded;
 }
 
 /**

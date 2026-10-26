@@ -1,5 +1,6 @@
 import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "../types";
 import { run, which } from "../proc";
+import { log } from "../log";
 
 const NPM = which("npm", "npm");
 
@@ -44,6 +45,11 @@ export const npmSource: Source = {
     // npm exits 0 when everything is current, 1 when outdated packages exist.
     // Anything else is a real failure. Empty stdout means "nothing outdated".
     const text = res.stdout.trim();
+    log(
+      "npm.list",
+      { src: "npm", code: res.code, chars: text.length, stderrChars: res.stderr.length },
+      res.code === 0 || res.code === 1 ? "info" : "warn",
+    );
     if (!text) {
       if (res.code !== 0 && res.code !== 1) {
         throw new Error(res.stderr.trim() || `npm outdated exited with code ${res.code}`);
@@ -69,7 +75,7 @@ export const npmSource: Source = {
     }
 
     const data = record as Record<string, NpmOutdatedEntry>;
-    return Object.entries(data)
+    const items = Object.entries(data)
       .filter(([, info]) => Boolean(info?.current || info?.latest || info?.wanted))
       .map(([name, info]) => {
         const current = info.current ?? "unknown";
@@ -83,6 +89,12 @@ export const npmSource: Source = {
           meta: info.location ? { location: info.location } : undefined,
         } satisfies UpgradeItem;
       });
+    log("npm.list.parsed", {
+      src: "npm",
+      entries: Object.keys(data).length,
+      items: items.length,
+    });
+    return items;
   },
 
   async upgrade(item, opts: UpgradeOptions): Promise<UpgradeResult> {
