@@ -378,6 +378,11 @@ shipping. `install:exe` reads the embedded `FileVersion` from both the staged an
 installed exe; if they match, it prints a `⚠ Version unchanged` warning and the
 confirmation prompt defaults to **no**, so the mistake is hard to make silently.
 
+**One commit per change: the fix and the version bump together.** Do not split a
+change into a `fix:`/`feat:` commit plus a separate `chore(release)` commit — the
+bump belongs in the same commit as the work it ships. A docs-only change needs no
+bump.
+
 Two gotchas learned the hard way:
 
 - **If the copy is interrupted** (e.g. an agent harness kills the process
