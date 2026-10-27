@@ -105,3 +105,24 @@ const created: string[] = [];
 afterAll(async () => {
   await Promise.all(created.map((dir) => rm(dir, { recursive: true, force: true })));
 });
+
+test("an aborted run kills the child instead of waiting for it", async () => {
+  const result = JSON.parse(
+    await probe(
+      `
+      const { run } = await import(process.argv[1]);
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 150);
+      const started = performance.now();
+      const r = await run(
+        [process.execPath, "-e", "setTimeout(() => {}, 5000)"],
+        { signal: controller.signal },
+      );
+      console.log(JSON.stringify({ code: r.code, ms: Math.round(performance.now() - started) }));
+      `,
+    ),
+  ) as { code: number; ms: number };
+
+  // The child would run for 5 s; the abort must end it promptly.
+  expect(result.ms).toBeLessThan(3_000);
+});

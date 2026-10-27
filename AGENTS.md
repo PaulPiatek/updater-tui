@@ -219,6 +219,29 @@ case, verified on 2026-10-20:
   and treats `already up to date` as success. Any other answer, including an
   unreadable one, keeps the failure. `tests/store-upgrade.test.ts` pins this.
 
+A fourth one is the **hand-off deployment**, verified on 2026-10-27 with the
+XBOX app — and it is the reason the check is not only a post-mortem:
+
+- `store update XBOX --apply` printed `Starting: 0%` and then nothing else,
+  re-printing that line every ~30 s. The AppXDeployment event log showed the
+  package was **staged at +12 s and registered at +26 s** (`Microsoft.GamingApp`
+  `2610.1001.20.0` → `2611.1001.8.0`); the CLI was still showing 0 % **6 minutes
+  later** and would never have exited. It fetches through the Windows Update
+  pipeline (`x-windowsupdate://…`), whose progress never reaches its output.
+- So `applyWithChecks()` runs the same check-only probe **while the install is
+  running** (first at 60 s, then every 45 s) and treats `no updates found` /
+  `already up to date` as "it landed": the zombie CLI is aborted and the item is
+  reported as upgraded, with `store.verdict {reason:"watch"}` in the log. The
+  probe itself is killed after 60 s so a check can never become the new hang.
+- `UPDATER_STORE_TIMEOUT_MS` (default 10 min) is only a **backstop** for a check
+  that keeps saying "pending"; even then it probes once more before reporting a
+  failure, so a deployment that landed just before the deadline still passes.
+
+**Do not "fix" this by waiting longer or by trusting the CLI's progress.** The
+CLI's output and exit code are both unreliable for these updates; the check is
+the only oracle. `tests/store-upgrade.test.ts` pins the never-exiting case, the
+timeout, the timeout-but-applied rescue, and that a fast exit never probes.
+
 The `updates` table columns are **Name / Publisher / Version / Date** (verified
 against a real pending update) — the same renderer as `installed`, and with **no
 target-version column**, so `latest` is `"update"` and the picker shows
@@ -258,6 +281,7 @@ is falsifiable from the file alone.
 | `proc.spawn` → `proc.heartbeat…` → `proc.exit` | did the child come back, and how long into what output did it stop? |
 | `proc.exit` → `store.verdict` / `wu.list {count,parsed}` / `wu.results` / `scan.done` | did the source reach a decision? |
 | `store.verdict` → `engine.result` → `ui.result` | did the result reach the pane? (`ui.result.skipped` = the tree was gone) |
+| `store.probe` (`watch`) → `store.verdict {reason:"watch"}` | did the in-flight check end a CLI that never exits? |
 | `engine.group` → `engine.group.end` | `returned` vs `emitted` — a result produced but never surfaced |
 | `overlay.open` → `proc.spawn(pty)` → `overlay.close` → `ui.hostProcess.resolve` | did the overlay promise settle? |
 | `console.mode {before, disturbed, restored}` | did a child break the console? (rule 2) |

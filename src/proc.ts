@@ -16,6 +16,13 @@ export interface RunOptions {
    * captured. `stdout`/`stderr` in the result are then empty.
    */
   inherit?: boolean;
+  /**
+   * Aborting kills the child and lets `run` resolve with whatever exit code the
+   * kill produced. Used to stop a tool that will not exit on its own (the Store
+   * CLI reports progress for a deployment that already finished) — never to
+   * cancel work we merely lost patience with.
+   */
+  signal?: AbortSignal;
 }
 
 /** A `.cmd` / `.bat` shim, which `node:child_process` refuses to spawn. */
@@ -52,6 +59,21 @@ async function readWeb(
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Kills the child when `signal` aborts. Returns a listener-removing cleanup. */
+function killOnAbort(signal: AbortSignal | undefined, kill: () => void): () => void {
+  if (!signal) return () => {};
+  const onAbort = (): void => {
+    try {
+      kill();
+    } catch {
+      // Already gone.
+    }
+  };
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
+  return () => signal.removeEventListener("abort", onAbort);
 }
 
 /**
@@ -98,6 +120,7 @@ export async function run(
         throw err;
       }
       procLog.spawned(proc.pid);
+      const offAbort = killOnAbort(options.signal, () => proc.kill());
       try {
         const code = await proc.exited;
         procLog.exited(code, null);
@@ -105,6 +128,8 @@ export async function run(
       } catch (err) {
         procLog.failed(err);
         throw err;
+      } finally {
+        offAbort();
       }
     }
 
@@ -128,6 +153,7 @@ export async function run(
         throw err;
       }
       procLog.spawned(proc.pid);
+      const offAbort = killOnAbort(options.signal, () => proc.kill());
       try {
         const [stdout, stderr] = await Promise.all([
           readWeb(proc.stdout as ReadableStream<Uint8Array> | undefined, (bytes) =>
@@ -143,6 +169,8 @@ export async function run(
       } catch (err) {
         procLog.failed(err);
         throw err;
+      } finally {
+        offAbort();
       }
     }
 
@@ -159,6 +187,7 @@ export async function run(
       throw err;
     }
     procLog.spawned(child.pid);
+    const offAbort = killOnAbort(options.signal, () => child.kill());
     try {
       const [stdout, stderr, code] = await Promise.all([
         readAll(child.stdout, (bytes) => procLog.push("out", bytes)),
@@ -174,6 +203,8 @@ export async function run(
     } catch (err) {
       procLog.failed(err);
       throw err;
+    } finally {
+      offAbort();
     }
   });
 }

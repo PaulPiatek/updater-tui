@@ -1,4 +1,5 @@
 import type { Source, UpgradeItem, UpgradeOptions, UpgradeResult } from "../types";
+import type { RunResult } from "../proc";
 import { run, which } from "../proc";
 import { clip, log, tailOf } from "../log";
 
@@ -31,6 +32,13 @@ import { clip, log, tailOf } from "../log";
  *   no success line (verified: 22608.1401.7.0 → 22609.1401.5.0). An ambiguous
  *   failure is therefore confirmed with `store update <id>` (no `--apply`,
  *   hence a check): `already up to date` means it landed.
+ * - A **hand-off deployment** (the XBOX app, verified 2026-10-27) is worse: the
+ *   CLI prints `Starting: 0%` and then keeps printing it **after** the package
+ *   has been staged and registered — the AppXDeployment log showed the update
+ *   finished 26 s into a run that was still showing 0 % six minutes later, and
+ *   it would never have exited. So the same check is used *while* the install
+ *   runs: as soon as it reports nothing pending, the work is done and the
+ *   zombie reporter is killed. `UPDATER_STORE_TIMEOUT_MS` is only a backstop.
  */
 const STORE = which("store", "store.exe");
 
@@ -231,22 +239,53 @@ export const looksSucceeded = (text: string): boolean =>
 const UPDATE_PENDING = /update available for|would you like to apply/i;
 const UPDATE_APPLIED = /already up to date|no update/i;
 
+/** Wait before the first in-flight check; the CLI is given a fair head start. */
+const WATCH_FIRST_MS = 60_000;
+/** Gap between in-flight checks. */
+const WATCH_EVERY_MS = 45_000;
+/** Backstop: even a check that keeps saying "pending" cannot run forever. */
+const APPLY_LIMIT_MS = 10 * 60_000;
+
+const envMs = (name: string, fallback: number): number => {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+};
+
+/** A timer that cannot hold the process open, and can be cancelled. */
+function sleep(ms: number): { promise: Promise<void>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+    (timer as unknown as { unref?: () => void }).unref?.();
+  });
+  return { promise, cancel: () => clearTimeout(timer) };
+}
+
 /**
  * Asks the StoreCLI whether `key` still has a pending update.
  *
  * This is a *check*: without `--apply` the CLI only prompts (and with no stdin
- * it installs nothing), so it is safe after a failed-looking run. `undefined`
- * means the answer could not be read, in which case the caller keeps its
- * original verdict rather than guessing.
+ * it installs nothing), so it is safe both after a failed-looking run (`verify`)
+ * and **while** an install is still running (`watch`). `undefined` means the
+ * answer could not be read, in which case the caller must not guess.
  */
-async function isStillPending(key: string): Promise<boolean | undefined> {
+async function probePending(
+  key: string,
+  phase: "verify" | "watch",
+): Promise<boolean | undefined> {
+  const controller = new AbortController();
+  // A check must not become the new hang: it is killed if it wedges too.
+  const timer = setTimeout(
+    () => controller.abort(),
+    envMs("UPDATER_STORE_PROBE_TIMEOUT_MS", 60_000),
+  );
   try {
-    const res = await run([STORE, "update", key]);
+    const res = await run([STORE, "update", key], { signal: controller.signal });
     const output = clean(`${res.stdout}\n${res.stderr}`);
     const applied = UPDATE_APPLIED.test(output);
     const pending = UPDATE_PENDING.test(output);
     log(
-      "store.verify",
+      phase === "verify" ? "store.verify" : "store.probe",
       {
         src: "store",
         key,
@@ -254,14 +293,77 @@ async function isStillPending(key: string): Promise<boolean | undefined> {
         match: applied ? "applied" : pending ? "pending" : "unreadable",
         tail: tailOf(output, 300),
       },
-      applied || pending ? "info" : "warn",
+      applied || (phase === "verify" && pending) ? "info" : pending ? "debug" : "warn",
     );
     if (applied) return false;
     if (pending) return true;
     return undefined;
   } catch (err) {
-    log("store.verify.error", { src: "store", key, error: err }, "warn");
+    log("store.probe.error", { src: "store", key, phase, error: err }, "warn");
     return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** How an `--apply` run ended — including "we stopped waiting, it was done". */
+type ApplyOutcome =
+  | { how: "exit"; result: RunResult }
+  | { how: "applied" }
+  | { how: "timeout"; elapsedMs: number; limitMs: number }
+  | { how: "error"; error: unknown };
+
+/**
+ * Runs `store update <key> --apply` while checking whether it is still pending.
+ *
+ * The CLI's own progress is not evidence: for a hand-off deployment (it fetches
+ * through the Windows Update pipeline) it prints `Starting: 0%` and then keeps
+ * doing so **after the update has already been installed** — verified against
+ * the AppXDeployment events, where the package registered 26 s into a run that
+ * was still showing 0 % six minutes later. So the check is the oracle, exactly
+ * as it is for the Store self-update: the moment it reports that nothing is
+ * pending, the work is done and the zombie reporter is killed.
+ *
+ * `APPLY_LIMIT_MS` remains as a backstop for a check that says "pending"
+ * forever (a download that will never land).
+ */
+async function applyWithChecks(key: string): Promise<ApplyOutcome> {
+  const startedAt = performance.now();
+  const controller = new AbortController();
+  const applying = run([STORE, "update", key, "--apply"], { signal: controller.signal });
+  // Once a check or the backstop decides, this promise is abandoned — it must
+  // never surface as an unhandled rejection.
+  const settled: Promise<ApplyOutcome> = applying.then(
+    (result) => ({ how: "exit", result }),
+    (error) => ({ how: "error", error }),
+  );
+
+  const limitMs = envMs("UPDATER_STORE_TIMEOUT_MS", APPLY_LIMIT_MS);
+  const everyMs = envMs("UPDATER_STORE_PROBE_EVERY_MS", WATCH_EVERY_MS);
+  const deadline = Date.now() + limitMs;
+  let nextAt = Date.now() + envMs("UPDATER_STORE_PROBE_MS", WATCH_FIRST_MS);
+
+  for (;;) {
+    const wait = Math.max(0, Math.min(nextAt, deadline) - Date.now());
+    const tick = sleep(wait);
+    const raced = await Promise.race([settled, tick.promise.then(() => "tick" as const)]);
+    tick.cancel();
+    if (raced !== "tick") return raced;
+
+    if (Date.now() >= deadline) {
+      controller.abort();
+      return {
+        how: "timeout",
+        elapsedMs: Math.round(performance.now() - startedAt),
+        limitMs,
+      };
+    }
+
+    if ((await probePending(key, "watch")) === false) {
+      controller.abort();
+      return { how: "applied" };
+    }
+    nextAt = Date.now() + everyMs;
   }
 }
 
@@ -346,7 +448,71 @@ export const storeSource: Source = {
       return { item, ok: true, command };
     }
 
-    const res = await run([STORE, "update", key, "--apply"]);
+    const outcome = await applyWithChecks(key);
+
+    // The in-flight check said the item is no longer pending: the deployment
+    // finished even though the CLI was still reporting progress.
+    if (outcome.how === "applied") {
+      log("store.verdict", { src: "store", item: item.id, key, reason: "watch", ok: true });
+      return {
+        item,
+        ok: true,
+        command,
+        output:
+          `✓ verified: the check reports '${key}' is already up to date — ` +
+          "stopped the CLI, which was still showing progress",
+      };
+    }
+
+    if (outcome.how === "timeout") {
+      // A backstop verdict still asks the check first, so a deployment that
+      // landed just before the deadline is not reported as a failure.
+      const stillPending = await probePending(key, "verify");
+      const ok = stillPending === false;
+      const minutes = Math.max(1, Math.round(outcome.limitMs / 60_000));
+      log(
+        "store.verdict",
+        {
+          src: "store",
+          item: item.id,
+          key,
+          reason: "timeout",
+          elapsedMs: outcome.elapsedMs,
+          verified: stillPending === undefined ? null : !stillPending,
+          ok,
+        },
+        ok ? "info" : "warn",
+      );
+      if (ok) {
+        return {
+          item,
+          ok: true,
+          command,
+          output:
+            `✓ verified: the check reports '${key}' is already up to date — ` +
+            `the CLI was stopped after ${minutes} min without progress`,
+        };
+      }
+      return {
+        item,
+        ok: false,
+        command,
+        error:
+          `timed out after ${minutes} min without the CLI reporting completion` +
+          (stillPending === true ? " (the update is still pending)" : ""),
+      };
+    }
+
+    if (outcome.how === "error") {
+      log(
+        "store.verdict",
+        { src: "store", item: item.id, key, reason: "error", ok: false, error: outcome.error },
+        "error",
+      );
+      throw outcome.error;
+    }
+
+    const res: RunResult = outcome.result;
     const output = clean(`${res.stdout}\n${res.stderr}`);
     const failed = looksFailed(output);
     const succeeded = looksSucceeded(output);
@@ -355,7 +521,7 @@ export const storeSource: Source = {
     // Store self-update looks like (see the note at the top). Ask the CLI
     // whether the item is still pending instead of reporting a false failure.
     const ambiguous = !failed && !succeeded && res.code !== 0;
-    const verified = ambiguous ? await isStillPending(key) : undefined;
+    const verified = ambiguous ? await probePending(key, "verify") : undefined;
     const ok = !failed && (succeeded || res.code === 0 || verified === false);
 
     // The exact branch that decided the verdict: `verified` is a tri-state, and
@@ -366,6 +532,7 @@ export const storeSource: Source = {
         src: "store",
         item: item.id,
         key,
+        reason: "exit",
         code: res.code,
         failed,
         succeeded,
