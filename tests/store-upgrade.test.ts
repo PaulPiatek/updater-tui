@@ -71,6 +71,7 @@ afterEach(() => {
   delete process.env.UPDATER_STORE_PROBE_MS;
   delete process.env.UPDATER_STORE_PROBE_EVERY_MS;
   delete process.env.UPDATER_STORE_PROBE_TIMEOUT_MS;
+  delete process.env.UPDATER_STORE_PROBE_RETRY_MS;
   delete process.env.UPDATER_STORE_TIMEOUT_MS;
 });
 
@@ -120,6 +121,58 @@ test("keeps the original failure when the confirm cannot be read", async () => {
   };
 
   const result = await storeSource.upgrade(STORE_ITEM, { dryRun: false });
+  expect(result.ok).toBe(false);
+});
+
+// The Store self-update replaces the package that *contains* store.exe, so at
+// the moment the --apply child exits the alias cannot be spawned at all:
+// `EUNKNOWN: unknown error, uv_spawn`, 7 ms after exit — and, worse, that is
+// exactly when the check is wanted. It works again seconds later, so the check
+// must treat a failed spawn as "not yet" instead of as "still broken".
+test("a check that cannot spawn is retried until the alias comes back", async () => {
+  process.env.UPDATER_STORE_PROBE_RETRY_MS = "1";
+  let probes = 0;
+  respond = (cmd) => {
+    if (cmd.includes("--apply")) return { code: 58, stdout: SELF_UPDATE_OUTPUT, stderr: "" };
+    probes++;
+    if (probes === 1) throw new Error("EUNKNOWN: unknown error, uv_spawn");
+    return { code: 0, stdout: APPLIED, stderr: "" };
+  };
+
+  const result = await storeSource.upgrade(STORE_ITEM, { dryRun: false });
+
+  expect(probes).toBe(2);
+  expect(result.ok).toBe(true);
+  expect(result.error).toBeUndefined();
+});
+
+test("a spawn that keeps failing is bounded and still a failure", async () => {
+  process.env.UPDATER_STORE_PROBE_RETRY_MS = "1";
+  let probes = 0;
+  respond = (cmd) => {
+    if (cmd.includes("--apply")) return { code: 58, stdout: SELF_UPDATE_OUTPUT, stderr: "" };
+    probes++;
+    throw new Error("EUNKNOWN: unknown error, uv_spawn");
+  };
+
+  const result = await storeSource.upgrade(STORE_ITEM, { dryRun: false });
+
+  expect(probes).toBe(4);
+  expect(result.ok).toBe(false);
+});
+
+test("a failure that is not a spawn failure is not retried", async () => {
+  process.env.UPDATER_STORE_PROBE_RETRY_MS = "1";
+  let probes = 0;
+  respond = (cmd) => {
+    if (cmd.includes("--apply")) return { code: 58, stdout: SELF_UPDATE_OUTPUT, stderr: "" };
+    probes++;
+    throw new Error("spawn failed");
+  };
+
+  const result = await storeSource.upgrade(STORE_ITEM, { dryRun: false });
+
+  expect(probes).toBe(1);
   expect(result.ok).toBe(false);
 });
 

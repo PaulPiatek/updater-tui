@@ -31,7 +31,9 @@ import { clip, log, tailOf } from "../log";
  *   95%` and exits `1` with neither marker — the update *worked*, but there is
  *   no success line (verified: 22608.1401.7.0 → 22609.1401.5.0). An ambiguous
  *   failure is therefore confirmed with `store update <id>` (no `--apply`,
- *   hence a check): `already up to date` means it landed.
+ *   hence a check): `already up to date` means it landed. The check itself can
+ *   fail to *start* for a second or two, because the alias it runs was just
+ *   replaced — see `isSpawnFailure` / `runProbe`.
  * - A **hand-off deployment** (the XBOX app, verified 2026-10-27) is worse: the
  *   CLI prints `Starting: 0%` and then keeps printing it **after** the package
  *   has been staged and registered — the AppXDeployment log showed the update
@@ -251,6 +253,22 @@ const envMs = (name: string, fallback: number): number => {
   return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
 };
 
+/** How many times a check that never started is retried, and the gap. */
+const SPAWN_ATTEMPTS = 4;
+const SPAWN_RETRY_MS = 2_000;
+
+/**
+ * A spawn that never started, as opposed to a check that ran and said nothing.
+ *
+ * `store.exe` is an app-execution alias *inside* the package the Store
+ * self-update replaces, so at the instant the install finishes the alias cannot
+ * be spawned at all — measured: `EUNKNOWN: unknown error, uv_spawn` 7 ms after
+ * the `--apply` child exited, which is exactly the moment the check is wanted.
+ * The alias works again seconds later, so this is a "not yet", not an answer.
+ */
+const isSpawnFailure = (err: unknown): boolean =>
+  err instanceof Error && /uv_spawn|EUNKNOWN|ENOENT|EACCES|EBUSY/i.test(err.message);
+
 /** A timer that cannot hold the process open, and can be cancelled. */
 function sleep(ms: number): { promise: Promise<void>; cancel: () => void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -280,7 +298,7 @@ async function probePending(
     envMs("UPDATER_STORE_PROBE_TIMEOUT_MS", 60_000),
   );
   try {
-    const res = await run([STORE, "update", key], { signal: controller.signal });
+    const res = await runProbe(key, phase, controller.signal);
     const output = clean(`${res.stdout}\n${res.stderr}`);
     const applied = UPDATE_APPLIED.test(output);
     const pending = UPDATE_PENDING.test(output);
@@ -303,6 +321,31 @@ async function probePending(
     return undefined;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * `store update <key>` — the check — retrying a spawn that never started.
+ *
+ * Only the *spawn* failure is retried: a check that runs and answers nothing
+ * readable is an answer (`undefined`), and must not be repeated into one.
+ */
+async function runProbe(
+  key: string,
+  phase: "verify" | "watch",
+  signal: AbortSignal,
+): Promise<RunResult> {
+  const retryMs = envMs("UPDATER_STORE_PROBE_RETRY_MS", SPAWN_RETRY_MS);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run([STORE, "update", key], { signal });
+    } catch (err) {
+      const retryable = isSpawnFailure(err) && attempt < SPAWN_ATTEMPTS && !signal.aborted;
+      if (!retryable) throw err;
+      log("store.probe.retry", { src: "store", key, phase, attempt, retryMs, error: err }, "warn");
+      await sleep(retryMs).promise;
+      if (signal.aborted) throw err;
+    }
   }
 }
 

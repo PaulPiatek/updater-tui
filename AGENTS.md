@@ -242,6 +242,25 @@ CLI's output and exit code are both unreliable for these updates; the check is
 the only oracle. `tests/store-upgrade.test.ts` pins the never-exiting case, the
 timeout, the timeout-but-applied rescue, and that a fast exit never probes.
 
+A fifth one, verified on 2026-10-27: **the self-update breaks the check itself.**
+
+- `store update "Microsoft Store" --apply` exited **58** at `Downloading: 94%`
+  (same shape as the documented exit-1 case, no success or error marker), and
+  the item was still pending before that run.
+- The check-only probe then could not **spawn**: `EUNKNOWN: unknown error,
+  uv_spawn` 7 ms after the child exited, because `store.exe` is an alias inside
+  the package being installed. The alias works again a few seconds later, so the
+  ambiguous verdict became `verified: null` → a **false failure**, with
+  `Downloading: 5% Downloading: 94%` shown as its error text. Proof it had
+  landed: the next run listed no Microsoft Store update, and
+  `Get-AppxPackage` reported `22609.1401.7.0`.
+- So `runProbe()` retries a **spawn failure** only (`isSpawnFailure`:
+  `uv_spawn`/`EUNKNOWN`/`ENOENT`/`EACCES`/`EBUSY`), 4 attempts 2 s apart
+  (`UPDATER_STORE_PROBE_RETRY_MS`) inside the 60 s probe timeout, logging
+  `store.probe.retry`. A check that *runs* and answers nothing readable is still
+  an answer — it is not retried, and the tri-state `verified` stays
+  `true`/`false`/`null`.
+
 The `updates` table columns are **Name / Publisher / Version / Date** (verified
 against a real pending update) — the same renderer as `installed`, and with **no
 target-version column**, so `latest` is `"update"` and the picker shows
