@@ -25,6 +25,42 @@ const PENDING =
 /** A `--apply` run that never comes back, as the Xbox app update behaved. */
 const neverSettles = (): Promise<RunResult> => new Promise<RunResult>(() => {});
 
+/**
+ * What `store update "Store Experience Host" --apply` actually printed, captured
+ * 2026-10-28. Exit code 0 — the CLI's exit code is not trustworthy.
+ */
+const NOT_A_PRODUCT_OUTPUT =
+  "Looking up product…\r\n" +
+  "Checking updates…\r\n" +
+  "Checking updates for Store Experience Host…\r\n" +
+  "\r\n" +
+  "\u001b[38;5;196mError: Update check failed: net_http_message_not_success_statuscode_reason, 404,\u001b[0m\r\n" +
+  "\u001b[38;5;196mNot Found\u001b[0m\r\n";
+
+/** What `store updates --apply` prints: started, then silence (fire-and-forget). */
+const STARTED_OUTPUT =
+  "Checking for updates…\r\n" +
+  "\r\n" +
+  "── Updates started (1) ────────────────\r\n" +
+  "\r\n" +
+  "🔄 Started installation of 1 Store update(s)…\r\n";
+
+/** A real `store updates --filter` listing for the store-managed component. */
+const MANAGED_LISTING =
+  "Checking for updates…\r\n" +
+  "\r\n" +
+  "── Updates available (1 found) ─────────────────────────────────────────────────\r\n" +
+  "\r\n" +
+  "Store-managed update available\r\n" +
+  "This Store app update can be installed immediately.\r\n" +
+  "┌───────────────────────┬───────────────────────┬────────────────┬────────────┐\r\n" +
+  "│ Name                  │ Publisher             │ Version        │ Date       │\r\n" +
+  "├───────────────────────┼───────────────────────┼────────────────┼────────────┤\r\n" +
+  "│ Store Experience Host │ Microsoft Corporation │ 22608.1401.1.0 │ 2026-09-22 │\r\n" +
+  "└───────────────────────┴───────────────────────┴────────────────┴────────────┘\r\n";
+
+const NO_UPDATES_OUTPUT = "Checking for updates…\r\n\r\nNo updates found.\r\n";
+
 type Call = { cmd: string[] };
 
 let calls: Call[] = [];
@@ -73,6 +109,8 @@ afterEach(() => {
   delete process.env.UPDATER_STORE_PROBE_TIMEOUT_MS;
   delete process.env.UPDATER_STORE_PROBE_RETRY_MS;
   delete process.env.UPDATER_STORE_TIMEOUT_MS;
+  delete process.env.UPDATER_STORE_MANAGED_POLL_MS;
+  delete process.env.UPDATER_STORE_MANAGED_TIMEOUT_MS;
 });
 
 test("a Store self-update that exits 1 is verified as success", async () => {
@@ -262,3 +300,85 @@ test("a fast exit never probes (no extra process per upgrade)", async () => {
   expect(result.ok).toBe(true);
   expect(calls).toHaveLength(1);
 });
+
+// `Store Experience Host` (= Microsoft.StorePurchaseApp) is a component of the
+// Store bundle, not a catalogue product: `store update <app> --apply` resolves
+// the product and then fails the update check with HTTP 404 (exit 0). Only the
+// store-managed bulk pipeline can install it, so that is the fallback — and it
+// is fire-and-forget, so the re-listing is the verdict.
+const MANAGED_ITEM = {
+  id: "store:Store Experience Host",
+  source: "store",
+  name: "Store Experience Host",
+  current: "22608.1401.1.0",
+  latest: "update",
+};
+
+test("a store-managed component falls back to the filtered bulk pipeline", async () => {
+  respond = (cmd) => {
+    if (cmd.includes("--filter")) {
+      return cmd.includes("--apply")
+        ? { code: 0, stdout: STARTED_OUTPUT, stderr: "" }
+        : { code: 0, stdout: NO_UPDATES_OUTPUT, stderr: "" };
+    }
+    return { code: 0, stdout: NOT_A_PRODUCT_OUTPUT, stderr: "" };
+  };
+
+  const result = await storeSource.upgrade(MANAGED_ITEM, { dryRun: false });
+
+  expect(result.ok).toBe(true);
+  expect(result.error).toBeUndefined();
+  expect(result.output).toContain("store-managed component");
+  expect(result.output).toContain("no longer listed");
+  expect(result.command).toBe('store updates --filter "Store Experience Host" --apply');
+  // Per-app attempt first, then the filtered bulk apply, then the re-listing.
+  expect(calls.map((call) => call.cmd.slice(1))).toEqual([
+    ["update", "Store Experience Host", "--apply"],
+    ["updates", "--filter", "Store Experience Host", "--apply"],
+    ["updates", "--filter", "Store Experience Host"],
+  ]);
+});
+
+test("the bulk fallback waits while the item is still listed", async () => {
+  process.env.UPDATER_STORE_MANAGED_POLL_MS = "1";
+  process.env.UPDATER_STORE_MANAGED_TIMEOUT_MS = "5000";
+  let listings = 0;
+  respond = (cmd) => {
+    if (cmd.includes("--filter")) {
+      if (cmd.includes("--apply")) return { code: 0, stdout: STARTED_OUTPUT, stderr: "" };
+      listings++;
+      return { code: 0, stdout: listings === 1 ? MANAGED_LISTING : NO_UPDATES_OUTPUT, stderr: "" };
+    }
+    return { code: 0, stdout: NOT_A_PRODUCT_OUTPUT, stderr: "" };
+  };
+
+  const result = await storeSource.upgrade(MANAGED_ITEM, { dryRun: false });
+
+  expect(listings).toBe(2);
+  expect(result.ok).toBe(true);
+});
+
+test("a store-managed item that never disappears is a bounded failure", async () => {
+  process.env.UPDATER_STORE_MANAGED_POLL_MS = "1";
+  process.env.UPDATER_STORE_MANAGED_TIMEOUT_MS = "40";
+  respond = (cmd) =>
+    cmd.includes("--filter")
+      ? { code: 0, stdout: cmd.includes("--apply") ? STARTED_OUTPUT : MANAGED_LISTING, stderr: "" }
+      : { code: 0, stdout: NOT_A_PRODUCT_OUTPUT, stderr: "" };
+
+  const result = await storeSource.upgrade(MANAGED_ITEM, { dryRun: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("store-managed component");
+  expect(result.error).toContain("still listed");
+});
+
+test("an unrelated failure does not trigger the bulk fallback", async () => {
+  respond = () => ({ code: 1, stdout: "❌ Error: something broke\r\n", stderr: "" });
+
+  const result = await storeSource.upgrade(MANAGED_ITEM, { dryRun: false });
+
+  expect(result.ok).toBe(false);
+  expect(calls).toHaveLength(1);
+});
+

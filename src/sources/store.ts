@@ -41,6 +41,23 @@ import { clip, log, tailOf } from "../log";
  *   it would never have exited. So the same check is used *while* the install
  *   runs: as soon as it reports nothing pending, the work is done and the
  *   zombie reporter is killed. `UPDATER_STORE_TIMEOUT_MS` is only a backstop.
+ * - A **store-managed component** cannot be updated per-app at all, verified
+ *   2026-10-28 with `Store Experience Host` (= `Microsoft.StorePurchaseApp`, a
+ *   component of the Microsoft Store bundle, not a catalogue product):
+ *   `store updates` lists it under `Store-managed update available`, but
+ *   `store update "Store Experience Host" --apply` resolves the product and then
+ *   fails the *update check* with `net_http_message_not_success_statuscode_reason,
+ *   404, Not Found` — while exiting **0**. No name or id helps: the package
+ *   name gives `No product found`, the PFN resolves and 404s too, it is absent
+ *   from `store search` / `store show` / `addons`, and the tables expose no id
+ *   column (`store update <product id>` instead says `Could not find installed
+ *   product metadata`). Only the bulk pipeline installs it, so that is the
+ *   fallback: `store updates --filter "<name>" --apply`.
+ *
+ *   That path is fire-and-forget — `🔄 Started installation of 1 Store
+ *   update(s)…` and exit 0 within ~5 s, with the package registering ~30 s
+ *   later and no completion marker ever — so it is verified by re-listing
+ *   (`store updates --filter`), never by output or exit code.
  */
 const STORE = which("store", "store.exe");
 
@@ -241,6 +258,20 @@ export const looksSucceeded = (text: string): boolean =>
 const UPDATE_PENDING = /update available for|would you like to apply/i;
 const UPDATE_APPLIED = /already up to date|no update/i;
 
+/**
+ * A per-app run that failed because the item is not a Store product.
+ *
+ * `Store Experience Host` answers `Update check failed: … 404, Not Found`; a
+ * package name answers `No product found`; the Store's own product id answers
+ * `Could not find installed product metadata`. All three mean the same thing:
+ * this item is only installable through the store-managed pipeline.
+ */
+const NOT_A_PRODUCT = /update check failed|no product found|could not find installed product metadata/i;
+
+/** How often the bulk path's result is re-listed, and the backstop for it. */
+const MANAGED_POLL_MS = 10_000;
+const MANAGED_LIMIT_MS = 3 * 60_000;
+
 /** Wait before the first in-flight check; the CLI is given a fair head start. */
 const WATCH_FIRST_MS = 60_000;
 /** Gap between in-flight checks. */
@@ -346,6 +377,66 @@ async function runProbe(
       await sleep(retryMs).promise;
       if (signal.aborted) throw err;
     }
+  }
+}
+
+/**
+ * Is `key` still listed by `store updates --filter <key>`?
+ *
+ * `undefined` means the answer could not be read. The re-listing is parsed
+ * with the real table parser (not a substring match) so a wrapped name in a
+ * narrow console still counts; `--filter` takes a name or publisher, and only
+ * the filtered list is ever inspected here.
+ */
+async function pendingByFilter(key: string): Promise<boolean | undefined> {
+  // A re-listing must not become the new hang, exactly like the check probe.
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    envMs("UPDATER_STORE_PROBE_TIMEOUT_MS", 60_000),
+  );
+  try {
+    const res = await run([STORE, "updates", "--filter", key], {
+      signal: controller.signal,
+    });
+    const output = clean(`${res.stdout}\n${res.stderr}`);
+    if (/no updates found/i.test(output)) return false;
+    if (parseStoreUpdates(output).length > 0) return true;
+    if (res.code !== 0 || looksFailed(output)) return undefined;
+    return false;
+  } catch (err) {
+    log("store.managed.error", { src: "store", key, error: err }, "warn");
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Installs a store-managed component through the bulk pipeline.
+ *
+ * `store updates --filter <key> --apply` is the only path that serves these
+ * items. It is fire-and-forget (`Started installation of N Store update(s)…`,
+ * exit 0, package registered tens of seconds later, no marker), so completion
+ * is read from the list: the item disappearing is the verdict.
+ */
+async function applyStoreManaged(key: string): Promise<{ ok: boolean; detail: string }> {
+  const startedAt = Date.now();
+  const limitMs = envMs("UPDATER_STORE_MANAGED_TIMEOUT_MS", MANAGED_LIMIT_MS);
+  const everyMs = envMs("UPDATER_STORE_MANAGED_POLL_MS", MANAGED_POLL_MS);
+
+  const start = await run([STORE, "updates", "--filter", key, "--apply"]);
+  const startOutput = clean(`${start.stdout}\n${start.stderr}`);
+  log(
+    "store.managed.start",
+    { src: "store", key, code: start.code, tail: tailOf(startOutput, 400) },
+    "info",
+  );
+
+  for (;;) {
+    if ((await pendingByFilter(key)) === false) return { ok: true, detail: startOutput };
+    if (Date.now() - startedAt >= limitMs) return { ok: false, detail: startOutput };
+    await sleep(everyMs).promise;
   }
 }
 
@@ -559,6 +650,48 @@ export const storeSource: Source = {
     const output = clean(`${res.stdout}\n${res.stderr}`);
     const failed = looksFailed(output);
     const succeeded = looksSucceeded(output);
+
+    // A store-managed component (e.g. `Store Experience Host`): the per-app
+    // path cannot serve it — the update check itself answers 404 — so switch to
+    // the bulk pipeline instead of reporting a failure that can never pass.
+    if (failed && NOT_A_PRODUCT.test(output)) {
+      const managed = await applyStoreManaged(key);
+      const managedCommand = `store updates --filter "${key}" --apply`;
+      const minutes = Math.max(1, Math.round(envMs("UPDATER_STORE_MANAGED_TIMEOUT_MS", MANAGED_LIMIT_MS) / 60_000));
+      log(
+        "store.verdict",
+        {
+          src: "store",
+          item: item.id,
+          key,
+          reason: "store-managed",
+          ok: managed.ok,
+          perApp: tailOf(output, 300),
+          tail: tailOf(managed.detail, 400),
+        },
+        managed.ok ? "info" : "warn",
+      );
+      if (managed.ok) {
+        return {
+          item,
+          ok: true,
+          command: managedCommand,
+          output: clip(
+            `'${key}' is a store-managed component, which \`store update <app>\` cannot install ` +
+              `(its update check answers 404).\n${managed.detail}\n` +
+              `✓ verified: it is no longer listed by \`store updates --filter "${key}"\``,
+          ),
+        };
+      }
+      return {
+        item,
+        ok: false,
+        command: managedCommand,
+        error:
+          `store-managed component: \`store update <app>\` cannot install it (update check 404), ` +
+          `and it is still listed after ${minutes} min of \`store updates --filter "${key}" --apply\``,
+      };
+    }
 
     // A non-zero exit with no marker is ambiguous — that is exactly what a
     // Store self-update looks like (see the note at the top). Ask the CLI

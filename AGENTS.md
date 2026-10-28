@@ -261,6 +261,29 @@ A fifth one, verified on 2026-10-27: **the self-update breaks the check itself.*
   an answer — it is not retried, and the tri-state `verified` stays
   `true`/`false`/`null`.
 
+A sixth one, verified on 2026-10-28: **a store-managed component is not an app
+and cannot be updated per-app at all.** `Store Experience Host`
+(`Microsoft.StorePurchaseApp`) is a component of the Store bundle, not a
+catalogue product — absent from `store search` / `store show`, not an `addons`
+item — so every form of `store update <key> --apply` fails:
+`"Store Experience Host"` and the PFN both **resolve the product and then fail
+the update check** (`net_http_message_not_success_statuscode_reason, 404, Not
+Found`, exit **0**), the package name gives `No product found`, and the Store's
+own valid product id gives `Could not find installed product metadata`. "Use the
+real name/id" is a dead end by construction: the tables expose no id column at
+all (Name/Publisher/Version/Date, no `--json`).
+
+So `NOT_A_PRODUCT` output switches to the only path that serves these items:
+`store updates --filter "<name>" --apply`. Its verdict is a **re-listing**
+(`store updates --filter`, parsed with the real table parser so a wrapped name
+still counts) showing the item gone — polled every 10 s for up to 3 min
+(`UPDATER_STORE_MANAGED_POLL_MS` / `UPDATER_STORE_MANAGED_TIMEOUT_MS`) — because
+that path is fire-and-forget too: `🔄 Started installation of N Store
+update(s)…`, exit 0 in ~5 s, package registered ~30 s later, no marker ever.
+The log records `store.managed.start` → `store.verdict {reason:"store-managed"}`;
+`tests/store-upgrade.test.ts` pins the fallback, the poll, the bounded failure,
+and that an unrelated `❌ Error` does not trigger it.
+
 The `updates` table columns are **Name / Publisher / Version / Date** (verified
 against a real pending update) — the same renderer as `installed`, and with **no
 target-version column**, so `latest` is `"update"` and the picker shows
