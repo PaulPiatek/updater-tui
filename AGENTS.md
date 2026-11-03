@@ -250,7 +250,8 @@ A fifth one, verified on 2026-10-27: **the self-update breaks the check itself.*
 - The check-only probe then could not **spawn**: `EUNKNOWN: unknown error,
   uv_spawn` 7 ms after the child exited, because `store.exe` is an alias inside
   the package being installed. The alias works again a few seconds later, so the
-  ambiguous verdict became `verified: null` → a **false failure**, with
+  ambiguous verdict became `pending: null` (an unreadable answer) → a **false
+  failure**, with
   `Downloading: 5% Downloading: 94%` shown as its error text. Proof it had
   landed: the next run listed no Microsoft Store update, and
   `Get-AppxPackage` reported `22609.1401.7.0`.
@@ -258,7 +259,7 @@ A fifth one, verified on 2026-10-27: **the self-update breaks the check itself.*
   `uv_spawn`/`EUNKNOWN`/`ENOENT`/`EACCES`/`EBUSY`), 4 attempts 2 s apart
   (`UPDATER_STORE_PROBE_RETRY_MS`) inside the 60 s probe timeout, logging
   `store.probe.retry`. A check that *runs* and answers nothing readable is still
-  an answer — it is not retried, and the tri-state `verified` stays
+  an answer — it is not retried, and the tri-state `pending` stays
   `true`/`false`/`null`.
 
 A sixth one, verified on 2026-10-28: **a store-managed component is not an app
@@ -298,6 +299,32 @@ like to install the N Store update(s) now? [y/n]". With no stdin it prints
 through `proc.run` is safe. **Never list with `--apply`** — that is the install.
 Results are read from the output (`✅ Installed` / `❌ Cancelled` / `❌ Error`),
 not from the exit code.
+
+**Accepted gap — exit 0 with no marker is not re-checked.** `ambiguous` needs
+`code !== 0`, so a per-app run that exits 0 having printed neither `✅` nor
+`❌` is reported as a success on the exit code alone. That is deliberate:
+
+- Output with no marker is the normal shape for an actual install (the Xbox
+  hand-off prints only progress); a no-op prints `already up to date`, which
+  `looksSucceeded` counts. A run that exits before the first in-flight check
+  (60 s default, `UPDATER_STORE_PROBE_MS`) always arrives here.
+- The only observed case went the right way: `store update "HashPhotos
+  Transfer" --apply` exited 0 with no marker after 19.4 s and the app was
+  installed (`store updates` → `No updates found.`). That is the sample which
+  actually reached this branch; the Xbox item never does, because the in-flight
+  check ends it (`reason:"watch"`) before it exits.
+- A probe that answers "still pending" would have to override `code === 0`,
+  turning a real success into a failure — the exact false-failure class the
+  rest of this section exists to prevent.
+
+So a silent non-install behind exit 0 is *tolerated*: it self-reports on the
+next run by reappearing in `store updates`. Do not "fix" it by probing after
+every exit-0 run — that is why `store.verdict` logs `pending` **absent** here
+(no probe ran), while `null` means probed-but-unreadable and `false` means
+done. If it is ever observed, prove it first — `store.verdict` logs a `tail`
+only for a failed *exit* verdict (the store-managed branch logs `tail` always,
+`timeout`/`watch` none), so add one (or check `store updates` afterwards)
+before changing the verdict logic.
 
 ### 6. Never let a non-interactive path hang
 

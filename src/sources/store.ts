@@ -612,7 +612,8 @@ export const storeSource: Source = {
           key,
           reason: "timeout",
           elapsedMs: outcome.elapsedMs,
-          verified: stillPending === undefined ? null : !stillPending,
+          // `pending` everywhere, from the probe's own tri-state: false = done.
+          pending: stillPending ?? null,
           ok,
         },
         ok ? "info" : "warn",
@@ -697,11 +698,14 @@ export const storeSource: Source = {
     // Store self-update looks like (see the note at the top). Ask the CLI
     // whether the item is still pending instead of reporting a false failure.
     const ambiguous = !failed && !succeeded && res.code !== 0;
-    const verified = ambiguous ? await probePending(key, "verify") : undefined;
-    const ok = !failed && (succeeded || res.code === 0 || verified === false);
+    const pending = ambiguous ? await probePending(key, "verify") : undefined;
+    const ok = !failed && (succeeded || res.code === 0 || pending === false);
 
-    // The exact branch that decided the verdict: `verified` is a tri-state, and
-    // "unreadable" (null) must stay distinguishable from "false" (done).
+    // The exact branch that decided the verdict. `pending` is the probe's raw
+    // tri-state, logged the same way in both branches: `false` = done, `null`
+    // = asked but unreadable, **absent** = never asked (only an ambiguous run
+    // is probed) — see the AGENTS.md note on exit 0 with no marker. Unreadable
+    // must never be mistaken for done: that was the self-update false failure.
     log(
       "store.verdict",
       {
@@ -713,7 +717,7 @@ export const storeSource: Source = {
         failed,
         succeeded,
         ambiguous,
-        verified: verified ?? null,
+        pending: ambiguous ? (pending ?? null) : undefined,
         ok,
         chars: output.length,
         tail: ok ? undefined : tailOf(output, 1_024),
@@ -721,7 +725,7 @@ export const storeSource: Source = {
       ok ? "info" : "warn",
     );
 
-    const detail = verified === false
+    const detail = pending === false
       ? `${output}${output ? "\n" : ""}✓ verified: store update reports it is already up to date`
       : output;
 
