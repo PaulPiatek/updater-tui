@@ -61,6 +61,24 @@ const MANAGED_LISTING =
 
 const NO_UPDATES_OUTPUT = "Checking for updates…\r\n\r\nNo updates found.\r\n";
 
+/**
+ * REAL `store installed --filter "Windows Terminal"` output, captured
+ * 2026-10-30 after that app had been updated. Same renderer as `updates`, but
+ * with a version — that is what fills in `latest` on a successful result.
+ */
+const INSTALLED_AFTER_WT =
+  "Loading installed applications…\r\n" +
+  "\r\n" +
+  "── Installed apps (1 found) ────────────────────────────────────────────────────\r\n" +
+  "\r\n" +
+  "┌──────────────────┬───────────────────────┬─────────────┬────────────┐\r\n" +
+  "│ Name             │ Publisher             │ Version     │ Date       │\r\n" +
+  "├──────────────────┼───────────────────────┼─────────────┼────────────┤\r\n" +
+  "│ Windows Terminal │ Microsoft Corporation │ 1.25.2733.0 │ 2026-10-03 │\r\n" +
+  "└──────────────────┴───────────────────────┴─────────────┴────────────┘\r\n";
+
+const NO_INSTALLED_OUTPUT = "Loading installed applications…\r\n\r\nNo applications found.\r\n";
+
 type Call = { cmd: string[] };
 
 let calls: Call[] = [];
@@ -130,6 +148,7 @@ test("a Store self-update that exits 1 is verified as success", async () => {
   expect(calls.map((call) => call.cmd.slice(1))).toEqual([
     ["update", "Microsoft Store", "--apply"],
     ["update", "Microsoft Store"],
+    ["installed", "--filter", "Microsoft Store"],
   ]);
 });
 
@@ -172,6 +191,8 @@ test("a check that cannot spawn is retried until the alias comes back", async ()
   let probes = 0;
   respond = (cmd) => {
     if (cmd.includes("--apply")) return { code: 58, stdout: SELF_UPDATE_OUTPUT, stderr: "" };
+    // Only `store update <key>` is the check; the version lookup is not.
+    if (cmd.includes("installed")) return { code: 0, stdout: NO_INSTALLED_OUTPUT, stderr: "" };
     probes++;
     if (probes === 1) throw new Error("EUNKNOWN: unknown error, uv_spawn");
     return { code: 0, stdout: APPLIED, stderr: "" };
@@ -220,7 +241,8 @@ test("an explicit success marker needs no confirmation", async () => {
   const result = await storeSource.upgrade(STORE_ITEM, { dryRun: false });
 
   expect(result.ok).toBe(true);
-  expect(calls).toHaveLength(1);
+  // The only per-item spawns are the install and the version lookup.
+  expect(calls.filter((call) => call.cmd[1] === "update")).toHaveLength(1);
 });
 
 test("an explicit error marker is not treated as ambiguous", async () => {
@@ -259,6 +281,7 @@ test("a CLI that never exits is resolved by the in-flight check", async () => {
   expect(calls.map((call) => call.cmd.slice(1))).toEqual([
     ["update", "Microsoft Store", "--apply"],
     ["update", "Microsoft Store"],
+    ["installed", "--filter", "Microsoft Store"],
   ]);
 });
 
@@ -292,12 +315,100 @@ test("the timeout backstop still reports success if the check says it landed", a
   expect(result.output).toContain("stopped after");
 });
 
-test("a fast exit never probes (no extra process per upgrade)", async () => {
+test("a fast exit never probes (no extra check per upgrade)", async () => {
   respond = () => ({ code: 0, stdout: "✅ 'Microsoft Store' installed\r\n", stderr: "" });
 
   const result = await storeSource.upgrade(STORE_ITEM, { dryRun: false });
 
   expect(result.ok).toBe(true);
+
+  // No `store update` check — only the install and the version lookup.
+  expect(calls.map((call) => call.cmd.slice(1))).toEqual([
+    ["update", "Microsoft Store", "--apply"],
+    ["installed", "--filter", "Microsoft Store"],
+  ]);
+});
+
+// The `updates` table has no target-version column, so an item says
+// `1.24.11321.0 → update`. `store installed --filter` does have a version, so a
+// successful upgrade refines the *result's* item with what is now installed —
+// the app then renders `1.24.11321.0 → 1.25.2733.0`.
+const WT_ITEM = {
+  id: "store:Windows Terminal",
+  source: "store",
+  name: "Windows Terminal",
+  current: "1.24.11321.0",
+  latest: "update",
+};
+
+test("a successful upgrade reports the version that is now installed", async () => {
+  respond = (cmd) =>
+    cmd.includes("installed")
+      ? { code: 0, stdout: INSTALLED_AFTER_WT, stderr: "" }
+      : { code: 0, stdout: "✅ Installed Windows Terminal\r\n", stderr: "" };
+
+  const result = await storeSource.upgrade(WT_ITEM, { dryRun: false });
+
+  expect(result.ok).toBe(true);
+  // `current` keeps the old version, so the pair still reads as from → to.
+  expect(result.item.current).toBe("1.24.11321.0");
+  expect(result.item.latest).toBe("1.25.2733.0");
+  // The item the picker holds is not mutated: only the result is refined.
+  expect(WT_ITEM.latest).toBe("update");
+});
+
+test("an unreadable or unchanged installed version leaves 'update'", async () => {
+  respond = (cmd) =>
+    cmd.includes("installed")
+      ? { code: 0, stdout: NO_INSTALLED_OUTPUT, stderr: "" }
+      : { code: 0, stdout: "✅ Installed Windows Terminal\r\n", stderr: "" };
+  expect((await storeSource.upgrade(WT_ITEM, { dryRun: false })).item.latest).toBe("update");
+
+  // Registration can lag the verdict: the lookup still reporting the old
+  // version is not a new version, so nothing is claimed.
+  calls = [];
+  respond = (cmd) =>
+    cmd.includes("installed")
+      ? { code: 0, stdout: INSTALLED_AFTER_WT.replace("1.25.2733.0", "1.24.11321.0"), stderr: "" }
+      : { code: 0, stdout: "✅ Installed Windows Terminal\r\n", stderr: "" };
+  expect((await storeSource.upgrade(WT_ITEM, { dryRun: false })).item.latest).toBe("update");
+
+  // A lookup that cannot spawn at all is likewise not an answer.
+  calls = [];
+  respond = (cmd) => {
+    if (cmd.includes("installed")) throw new Error("EUNKNOWN: unknown error, uv_spawn");
+    return { code: 0, stdout: "✅ Installed Windows Terminal\r\n", stderr: "" };
+  };
+  expect((await storeSource.upgrade(WT_ITEM, { dryRun: false })).item.latest).toBe("update");
+});
+
+// `--filter` matches the publisher as well as the name, so a word that is both
+// can return several apps. Picking one of them would report the wrong version.
+test("an ambiguous installed listing is not trusted", async () => {
+  const twoApps =
+    "│ Name                  │ Publisher │ Version     │\r\n" +
+    "│ Windows Terminal      │ Microsoft │ 1.25.2733.0 │\r\n" +
+    "│ Windows Terminal Prev │ Microsoft │ 1.26.1.0    │\r\n";
+  respond = (cmd) =>
+    cmd.includes("installed")
+      ? { code: 0, stdout: twoApps, stderr: "" }
+      : { code: 0, stdout: "✅ Installed Terminal\r\n", stderr: "" };
+
+  const result = await storeSource.upgrade(
+    { ...WT_ITEM, id: "store:Terminal", name: "Terminal" },
+    { dryRun: false },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.item.latest).toBe("update");
+});
+
+test("a failed upgrade never looks up an installed version", async () => {
+  respond = () => ({ code: 1, stdout: "❌ Error: something broke\r\n", stderr: "" });
+
+  const result = await storeSource.upgrade(WT_ITEM, { dryRun: false });
+
+  expect(result.ok).toBe(false);
   expect(calls).toHaveLength(1);
 });
 
@@ -331,11 +442,13 @@ test("a store-managed component falls back to the filtered bulk pipeline", async
   expect(result.output).toContain("store-managed component");
   expect(result.output).toContain("no longer listed");
   expect(result.command).toBe('store updates --filter "Store Experience Host" --apply');
-  // Per-app attempt first, then the filtered bulk apply, then the re-listing.
+  // Per-app attempt first, then the filtered bulk apply, then the re-listing,
+  // then the version lookup that fills in `latest`.
   expect(calls.map((call) => call.cmd.slice(1))).toEqual([
     ["update", "Store Experience Host", "--apply"],
     ["updates", "--filter", "Store Experience Host", "--apply"],
     ["updates", "--filter", "Store Experience Host"],
+    ["installed", "--filter", "Store Experience Host"],
   ]);
 });
 
@@ -344,6 +457,8 @@ test("the bulk fallback waits while the item is still listed", async () => {
   process.env.UPDATER_STORE_MANAGED_TIMEOUT_MS = "5000";
   let listings = 0;
   respond = (cmd) => {
+    // The post-upgrade version lookup is not a listing and must not count.
+    if (cmd.includes("installed")) return { code: 0, stdout: NO_INSTALLED_OUTPUT, stderr: "" };
     if (cmd.includes("--filter")) {
       if (cmd.includes("--apply")) return { code: 0, stdout: STARTED_OUTPUT, stderr: "" };
       listings++;
@@ -361,10 +476,12 @@ test("the bulk fallback waits while the item is still listed", async () => {
 test("a store-managed item that never disappears is a bounded failure", async () => {
   process.env.UPDATER_STORE_MANAGED_POLL_MS = "1";
   process.env.UPDATER_STORE_MANAGED_TIMEOUT_MS = "40";
-  respond = (cmd) =>
-    cmd.includes("--filter")
+  respond = (cmd) => {
+    if (cmd.includes("installed")) return { code: 0, stdout: NO_INSTALLED_OUTPUT, stderr: "" };
+    return cmd.includes("--filter")
       ? { code: 0, stdout: cmd.includes("--apply") ? STARTED_OUTPUT : MANAGED_LISTING, stderr: "" }
       : { code: 0, stdout: NOT_A_PRODUCT_OUTPUT, stderr: "" };
+  };
 
   const result = await storeSource.upgrade(MANAGED_ITEM, { dryRun: false });
 

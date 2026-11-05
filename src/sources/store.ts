@@ -18,7 +18,10 @@ import { clip, log, tailOf } from "../log";
  * - `store updates` prints a coloured box table on **stdout** (CRLF), and there
  *   is no `--json`. The columns are **Name / Publisher / Version / Date** — the
  *   same renderer as `store installed` — and there is **no target-version
- *   column**, so `latest` falls back to `"update"`.
+ *   column**, so `latest` falls back to `"update"`. That version does exist
+ *   *after* the fact: once an upgrade succeeds, `store installed --filter
+ *   <name>` (same renderer, version column present) fills in `latest` on the
+ *   result, so the app can show `1.24.11321.0 → 1.25.2733.0`.
  * - `store updates` is **interactive**: without `--apply` it still asks
  *   "Would you like to install the N Store update(s) now? [y/n]". `proc.run`
  *   gives it no stdin, so it prints `Failed to read input in non-interactive
@@ -413,6 +416,87 @@ async function pendingByFilter(key: string): Promise<boolean | undefined> {
 }
 
 /**
+ * The version `store installed --filter <key>` reports, i.e. what is on disk now.
+ *
+ * The `updates` table has no target-version column (see the note at the top), so
+ * the picker can only say `1.24.11321.0 → update`. The `installed` table is the
+ * same renderer but *does* carry a version (Name / Publisher / Version / Date),
+ * so one lookup after a successful upgrade is the only way to say what was
+ * actually installed.
+ *
+ * `undefined` means it could not be read — never guess in that case.
+ */
+async function installedVersion(key: string): Promise<string | undefined> {
+  // Same guard as the checks: a lookup must not become the new hang.
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    envMs("UPDATER_STORE_PROBE_TIMEOUT_MS", 60_000),
+  );
+  try {
+    const res = await run([STORE, "installed", "--filter", key], {
+      signal: controller.signal,
+    });
+    const output = clean(`${res.stdout}\n${res.stderr}`);
+    const rows = parseStoreUpdates(output);
+    // `--filter` matches the publisher too, so several rows can come back for a
+    // name that is also a publisher word. Only an exact name match is trusted
+    // then; a single row is unambiguous either way.
+    const exact = rows.filter((row) => row.name.toLowerCase() === key.toLowerCase());
+    const row = exact.length === 1 ? exact[0] : rows.length === 1 ? rows[0] : undefined;
+    const version = row?.current;
+    // 0 rows is normal (a store-managed component is not in the installed
+    // list); rows without a version would mean the table shape changed.
+    log(
+      "store.installed",
+      {
+        src: "store",
+        key,
+        code: res.code,
+        rows: rows.length,
+        version: version ?? null,
+        tail: version ? undefined : tailOf(output, 300),
+      },
+      version ? "info" : rows.length > 0 ? "warn" : "debug",
+    );
+    // `parseStoreUpdates` falls back to "installed" when there is no version
+    // column, which is an absence, not a version.
+    return version && version !== "installed" ? version : undefined;
+  } catch (err) {
+    log("store.installed.error", { src: "store", key, error: err }, "warn");
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Refines a successful result's item with the version that is now installed.
+ *
+ * Only on success, and only when the answer differs from `current`: an
+ * unreadable lookup, or one still showing the old version (registration can lag
+ * the verdict), leaves `latest: "update"` — exactly what the picker showed —
+ * rather than reporting a version nobody verified.
+ */
+async function withInstalledVersion(
+  key: string,
+  result: UpgradeResult,
+): Promise<UpgradeResult> {
+  if (!result.ok) return result;
+  const version = await installedVersion(key);
+  if (!version || version === result.item.current) return result;
+  log("store.version", {
+    src: "store",
+    item: result.item.id,
+    key,
+    from: result.item.current,
+    to: version,
+  });
+  // `current` keeps the old version so the UI can render `old → new`.
+  return { ...result, item: { ...result.item, latest: version } };
+}
+
+/**
  * Installs a store-managed component through the bulk pipeline.
  *
  * `store updates --filter <key> --apply` is the only path that serves these
@@ -588,14 +672,14 @@ export const storeSource: Source = {
     // finished even though the CLI was still reporting progress.
     if (outcome.how === "applied") {
       log("store.verdict", { src: "store", item: item.id, key, reason: "watch", ok: true });
-      return {
+      return withInstalledVersion(key, {
         item,
         ok: true,
         command,
         output:
           `✓ verified: the check reports '${key}' is already up to date — ` +
           "stopped the CLI, which was still showing progress",
-      };
+      });
     }
 
     if (outcome.how === "timeout") {
@@ -619,14 +703,14 @@ export const storeSource: Source = {
         ok ? "info" : "warn",
       );
       if (ok) {
-        return {
+        return withInstalledVersion(key, {
           item,
           ok: true,
           command,
           output:
             `✓ verified: the check reports '${key}' is already up to date — ` +
             `the CLI was stopped after ${minutes} min without progress`,
-        };
+        });
       }
       return {
         item,
@@ -673,7 +757,7 @@ export const storeSource: Source = {
         managed.ok ? "info" : "warn",
       );
       if (managed.ok) {
-        return {
+        return withInstalledVersion(key, {
           item,
           ok: true,
           command: managedCommand,
@@ -682,7 +766,7 @@ export const storeSource: Source = {
               `(its update check answers 404).\n${managed.detail}\n` +
               `✓ verified: it is no longer listed by \`store updates --filter "${key}"\``,
           ),
-        };
+        });
       }
       return {
         item,
@@ -729,7 +813,7 @@ export const storeSource: Source = {
       ? `${output}${output ? "\n" : ""}✓ verified: store update reports it is already up to date`
       : output;
 
-    return {
+    return withInstalledVersion(key, {
       item,
       ok,
       command,
@@ -737,6 +821,6 @@ export const storeSource: Source = {
       error: ok
         ? undefined
         : detail.split("\n").filter(Boolean).slice(-2).join(" ") || `exit code ${res.code}`,
-    };
+    });
   },
 };

@@ -15,7 +15,15 @@ export interface UpgradeItem {
   name: string;
   /** Currently installed version. */
   current: string;
-  /** Version we would upgrade to. */
+  /**
+   * Version we would upgrade to.
+   *
+   * Some sources only learn the target after the upgrade (the Microsoft Store
+   * exposes no target version when listing), so an `UpgradeResult` may carry an
+   * item whose `latest` has been filled in with the version now installed —
+   * that is what lets the result read `1.24.11321.0 → 1.25.2733.0` instead of
+   * `1.24.11321.0 → update`.
+   */
   latest: string;
   /**
    * Optional override for the picker's right-hand text. Sources whose items

@@ -293,6 +293,18 @@ parser) and is exercised against **real captured output** in
 `tests/store.test.ts` (both `updates` and `installed`, the latter for wrapped
 cells).
 
+The target version does exist **after** the fact, which is why the result is
+refined: once an upgrade has succeeded, the source runs `store installed
+--filter "<name>"` (the same renderer, version column present) and fills
+`latest` on the **result's** item — a copy, so the scanned item and the picker
+are untouched — and the right-hand pane and the headless `✔` line then read
+`1.24.11321.0 → 1.25.2733.0`. It never guesses: a failed spawn, no matching row,
+an **ambiguous** match (several apps and none with the exact name — `--filter`
+matches the publisher too) or a version still equal to `current` (registration
+can lag the verdict) all leave `→ update`. It runs only on success, costs one
+spawn (~1.3 s) per upgraded store app, and logs `store.installed` /
+`store.version`.
+
 `store updates` is **interactive**: even without `--apply` it asks "Would you
 like to install the N Store update(s) now? [y/n]". With no stdin it prints
 `Failed to read input in non-interactive mode.` and installs nothing, so listing
@@ -350,6 +362,7 @@ is falsifiable from the file alone.
 | `proc.spawn` → `proc.heartbeat…` → `proc.exit` | did the child come back, and how long into what output did it stop? |
 | `proc.exit` → `store.verdict` / `wu.list {count,parsed}` / `wu.results` / `scan.done` | did the source reach a decision? |
 | `store.verdict` → `engine.result` → `ui.result` | did the result reach the pane? (`ui.result.skipped` = the tree was gone) |
+| `store.installed` → `store.version` | did the post-upgrade version lookup read anything, and did it reach the result? |
 | `store.probe` (`watch`) → `store.verdict {reason:"watch"}` | did the in-flight check end a CLI that never exits? |
 | `engine.group` → `engine.group.end` | `returned` vs `emitted` — a result produced but never surfaced |
 | `overlay.open` → `proc.spawn(pty)` → `overlay.close` → `ui.hostProcess.resolve` | did the overlay promise settle? |
@@ -635,6 +648,9 @@ Done:
 - [x] A diagnostic JSONL log in the temp folder, on by default — see "The
   diagnostic log". Written because a Store update once "did not come back" and
   the app could not say why, or where.
+- [x] A store result reports the version actually installed (`store installed
+  --filter` after the fact), so the pane shows `1.24.11321.0 → 1.25.2733.0`
+  instead of `→ update`.
 
 Not done / deliberately:
 
