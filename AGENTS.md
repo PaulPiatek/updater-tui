@@ -274,6 +274,18 @@ own valid product id gives `Could not find installed product metadata`. "Use the
 real name/id" is a dead end by construction: the tables expose no id column at
 all (Name/Publisher/Version/Date, no `--json`).
 
+`NOT_A_PRODUCT` therefore matches **the check failing**, not one error text, and
+the reason it fails is not always the same: 404 for the components above, or an
+unrelated error for an ordinary installed app — `The parameter is incorrect.
+(0x80070057)` was observed (2026-11-06) on a normal catalogue app, where the
+fallback found the item already gone and its version had advanced. So this is
+not a store-managed-component detector — **any** app whose update check fails
+lands here. That is safe because the fallback trusts no error text: it re-lists
+and reports what the list says, which is also why a broken check on a normal app
+turns into a real success instead of a false failure. Keep the user-facing
+wording generic ("its update check fails"); hard-coding 404 made a true success
+look like a diagnostics mismatch.
+
 So `NOT_A_PRODUCT` output switches to the only path that serves these items:
 `store updates --filter "<name>" --apply`. Its verdict is a **re-listing**
 (`store updates --filter`, parsed with the real table parser so a wrapped name

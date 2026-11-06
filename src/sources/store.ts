@@ -262,12 +262,17 @@ const UPDATE_PENDING = /update available for|would you like to apply/i;
 const UPDATE_APPLIED = /already up to date|no update/i;
 
 /**
- * A per-app run that failed because the item is not a Store product.
+ * A per-app run whose update check failed, for any reason.
  *
- * `Store Experience Host` answers `Update check failed: … 404, Not Found`; a
- * package name answers `No product found`; the Store's own product id answers
- * `Could not find installed product metadata`. All three mean the same thing:
- * this item is only installable through the store-managed pipeline.
+ * A store-managed component (e.g. `Store Experience Host`) always fails this
+ * way — `Update check failed: … 404, Not Found`, `No product found`, or
+ * `Could not find installed product metadata` — because it is not a catalogue
+ * product at all.
+ *
+ * But it is not the only case: the check fails on ordinary installed apps too,
+ * with unrelated reasons (`0x80070057`, `The parameter is incorrect`). So this
+ * matches *the check failing*, never a particular error text, and the fallback
+ * never trusts the error either — it re-lists and reports what the list says.
  */
 const NOT_A_PRODUCT = /update check failed|no product found|could not find installed product metadata/i;
 
@@ -736,9 +741,11 @@ export const storeSource: Source = {
     const failed = looksFailed(output);
     const succeeded = looksSucceeded(output);
 
-    // A store-managed component (e.g. `Store Experience Host`): the per-app
-    // path cannot serve it — the update check itself answers 404 — so switch to
-    // the bulk pipeline instead of reporting a failure that can never pass.
+    // The update check failed, so the per-app path cannot serve this item —
+    // either it is a store-managed component (`Store Experience Host`) or an
+    // app whose check is broken — so try the bulk pipeline instead of reporting
+    // a failure that may never pass. The verdict comes from the re-listing, not
+    // from the error text.
     if (failed && NOT_A_PRODUCT.test(output)) {
       const managed = await applyStoreManaged(key);
       const managedCommand = `store updates --filter "${key}" --apply`;
@@ -763,7 +770,7 @@ export const storeSource: Source = {
           command: managedCommand,
           output: clip(
             `'${key}' is a store-managed component, which \`store update <app>\` cannot install ` +
-              `(its update check answers 404).\n${managed.detail}\n` +
+              `(its update check fails).\n${managed.detail}\n` +
               `✓ verified: it is no longer listed by \`store updates --filter "${key}"\``,
           ),
         });
@@ -773,7 +780,7 @@ export const storeSource: Source = {
         ok: false,
         command: managedCommand,
         error:
-          `store-managed component: \`store update <app>\` cannot install it (update check 404), ` +
+          `store-managed component: \`store update <app>\` cannot install it (update check fails), ` +
           `and it is still listed after ${minutes} min of \`store updates --filter "${key}" --apply\``,
       };
     }
