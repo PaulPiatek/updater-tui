@@ -108,7 +108,8 @@ export class OutputPane {
   private order: string[] = [];
   private lines: TextRenderable[] = [];
   private spinnerFrame = 0;
-  private spinnerTimer: ReturnType<typeof setInterval> | null = null;
+  /** Unsubscribes from the renderer's shared animation clock while scanning. */
+  private spinnerTick: (() => void) | null = null;
 
   constructor(
     private readonly renderer: RenderContext,
@@ -255,17 +256,22 @@ export class OutputPane {
    * finished scan leaves no timer behind.
    */
   private startSpinner(): void {
-    if (this.spinnerTimer !== null) return;
-    this.spinnerTimer = setInterval(() => {
-      this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
-      this.layoutStatus();
-    }, SPINNER_INTERVAL_MS);
+    if (this.spinnerTick !== null) return;
+    // The renderer's shared clock, not a timer of our own: ticks land in one
+    // frame with every other animation instead of each drawing its own.
+    this.spinnerTick = this.renderer.onAnimationTick(
+      1000 / SPINNER_INTERVAL_MS,
+      () => {
+        this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
+        this.layoutStatus();
+      },
+    );
   }
 
   private stopSpinner(): void {
-    if (this.spinnerTimer === null) return;
-    clearInterval(this.spinnerTimer);
-    this.spinnerTimer = null;
+    if (this.spinnerTick === null) return;
+    this.spinnerTick();
+    this.spinnerTick = null;
   }
 
   private stopSpinnerIfIdle(): void {

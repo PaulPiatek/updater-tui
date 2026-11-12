@@ -458,7 +458,7 @@ To ship a fresh binary:
 bun run build:exe && bun run install:exe
 ```
 
-`install:exe` copies `dist/updater-tui.exe` (~93 MB) to
+`install:exe` copies `dist/updater-tui.exe` (~131 MB) to
 `%USERPROFILE%\.local\bin\updater-tui.exe` (already on PATH), asking for
 confirmation; `--yes` skips the prompt. It stages to a `.new` file and renames,
 so re-installing over a running `updater-tui.exe` is safe.
@@ -514,11 +514,37 @@ You cannot drive a TUI by piping stdin — it needs a real terminal. Two layers:
   OpenTUI upgrade. These are manual harnesses (tens of seconds), not part of
   `bun test`.
 
+**Wait for app frames in real time, not with `waitForFrame`.** Since OpenTUI 0.8
+the test renderer stops pumping as soon as its scheduler is idle
+(`!isRunning && !isRendering && !hasScheduledRender`), which for a test renderer
+is *always*: `waitForFrame` bails after a few milliseconds. The app's progress
+comes from async children (a spawned package manager) and from the renderer's
+animation clock, so a frame-wait cannot see it. `tests/helpers.ts` exports
+`frameText(setup, predicate)`, which renders, looks, sleeps and repeats until a
+deadline — use it for anything that touches `App`. Tests of a single component
+(`checklist`, `theme`, `output`) still work with `waitForFrame`, because the
+first frame already shows the state.
+
 A PTY's output is **diffed** — a static screen emits almost nothing, so don't
 assert on "the screen contains X" there; assert on a marker that implies a
 *change* (a scan line, a result). For frame assertions use the test renderer.
 
 `@xterm/headless` is not needed (and must not be added to app deps).
+
+---
+
+## Animate on the renderer's clock, not a timer
+
+`renderer.onAnimationTick(fps, cb)` (OpenTUI 0.8) is what the status bar and the
+scan spinner use; it returns an unsubscribe function. A `setInterval` of our own
+would draw its own frame, so two spinners animated two frames per tick, and a
+renderer-owned timer keeps the loop live while something is animating and idle
+when nothing is. `ACTIVITY_MS` / `SPINNER_INTERVAL_MS` are converted with
+`1000 / ms` (80 ms → 12.5 fps).
+
+Do not replace these with `renderer.requestLive()`: that runs the loop at
+`targetFps` whenever it is set, which is the opposite of what 0.8's partial
+repaint is for.
 
 ---
 
@@ -594,6 +620,30 @@ in-memory renderer and asserts every non-blank glyph carries a palette intent.
 
 ---
 
+## Copy on select uses OSC 52
+
+Selecting text with the mouse copies it, and `src/ui/toast.ts` raises a small
+badge in the top-right corner for a second (`TOAST_MS`). Nothing else is
+involved: OpenTUI's `selection` event gives the text (`Selection.getSelectedText()`)
+and `renderer.copyToClipboardOSC52()` writes it.
+
+- **OSC 52, not the native host clipboard.** It needs no child process and no
+  window, works over SSH, and Windows Terminal has honoured it by default since
+  v1.2. The write is fired off with no acknowledgement (some terminals refuse it
+  silently), which is why the badge reports what the call returned rather than
+  claiming success: `✔ Copied` when the sequence was queued, `⚠ Copy failed`
+  when the terminal said it cannot.
+- **The badge is absolute, not flex** (`position: "absolute"`, `top`/`right`), so
+  showing it cannot resize a pane. It is the app root's last child so it paints
+  over the panes; `tests/copy-selection.test.ts` asserts both.
+- `onSelection` skips a zero-width selection, so a plain click copies nothing.
+- The badge's hide timer is cleared in `Toast.dispose()` from `quit`/`destroy`;
+  a timer firing after `renderer.destroy()` would write to a dead tree.
+- `ui.clipboard { chars, copied }` goes in the diagnostic log, so "it said
+  Copied but nothing arrived" is at least attributable to the terminal.
+
+---
+
 ## Accepted: embedded terminal overlay for custom scripts
 
 Custom scripts are hosted in an overlay on a pty and rendered live via OpenTUI's
@@ -631,10 +681,16 @@ test renderer + panel + simulated key, iterated with `bun test`); PTY runs are
 ## Environment
 
 - Windows 11 Pro (current versions), Windows Terminal (PowerShell 7).
-- Bun 1.4.3, Node 24.x. (Bun moves fast; check `bun --version` against
+- Bun 1.4.4, Node 24.x. (Bun moves fast; check `bun --version` against
   `winget upgrade --id Oven-sh.Bun` — the winget manifest lags a new release by
   a day or two, so don't force it with `bun upgrade`, which desyncs the winget
   record.)
+- `@opentui/core` 0.8.4, pinned exactly. Moving it is its own change, not a
+  drive-by: 0.8 rewrote `ScrollBox` as native state (its `content`/`viewport` are
+  facades, not renderables), changed hit testing, and made partial repaints the
+  point. Re-verify with `bun test`, `scripts/pty-check.ts`,
+  `scripts/overlay-check.ts`, then `bun run build:exe` +
+  `scripts/pty-exe-check.ts` + `scripts/overlay-exe-check.ts`.
 - Package managers present: `npm`, `winget`, `bun`, `uv`. **No** scoop/choco/
   pipx/cargo/go/gem.
 - `~/.local/bin` is on PATH (uv Python shims, the old `updater.exe`, and now
@@ -663,6 +719,8 @@ Done:
 - [x] A store result reports the version actually installed (`store installed
   --filter` after the fact), so the pane shows `1.24.11321.0 → 1.25.2733.0`
   instead of `→ update`.
+- [x] Selecting text with the mouse copies it (OSC 52) and flashes a `Copied`
+  badge in the top-right corner — see "Copy on select uses OSC 52".
 
 Not done / deliberately:
 

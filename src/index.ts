@@ -46,6 +46,8 @@ Sources:
 
 Interactive keys:
   ↑/↓ move   space toggle   a all/none   Enter scan/upgrade   Esc back   q quit
+  Mouse: drag to select text; it is copied to the clipboard and a
+         "Copied" badge appears in the top-right corner for a second.
 
 Flow: pick sources, pick packages, watch the results in the output pane.
 Pinned packages are shown locked; ignored ones are hidden (see config).

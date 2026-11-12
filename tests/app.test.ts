@@ -19,6 +19,7 @@ import {
 } from "../src/ui/app";
 import { builtinSources } from "../src/sources";
 import { bandRamp, colors } from "../src/ui/theme";
+import { frameText } from "./helpers";
 
 /** Builds a temp project with one custom script so discovery has something. */
 async function project(exitCode = 0): Promise<{ cwd: string; dispose: () => Promise<void> }> {
@@ -36,35 +37,36 @@ async function project(exitCode = 0): Promise<{ cwd: string; dispose: () => Prom
   return { cwd, dispose: () => rm(cwd, { recursive: true, force: true }) };
 }
 
-/** `waitForFrame` throws on exhaustion; wrap it to return the last frame. */
+/**
+ * Renders and polls in real time until `predicate` matches. Returns the last
+ * frame on exhaustion rather than throwing, so the assertion that follows says
+ * what was actually on screen.
+ */
 async function frame(
   setup: Awaited<ReturnType<typeof createTestRenderer>>,
   predicate: (text: string) => boolean,
 ): Promise<string> {
   try {
-    return await setup.waitForFrame(predicate);
+    return await frameText(setup, predicate);
   } catch {
     return setup.captureCharFrame();
   }
 }
 
 /**
- * Renders and polls until `predicate` matches. Unlike `waitForFrame` this keeps
- * going for seconds, which an upgrade needs: a hosted script's overlay lingers
- * ~700 ms after the child exits before the app comes back.
+ * The same, with a longer budget: an upgrade needs seconds, because a hosted
+ * script's overlay lingers ~700 ms after the child exits before the app returns.
  */
 async function frameEventually(
   setup: Awaited<ReturnType<typeof createTestRenderer>>,
   predicate: (text: string) => boolean,
   tries = 60,
 ): Promise<string> {
-  let text = setup.captureCharFrame();
-  for (let i = 0; i < tries && !predicate(text); i++) {
-    await Bun.sleep(100);
-    await setup.renderOnce();
-    text = setup.captureCharFrame();
+  try {
+    return await frameText(setup, predicate, tries * 100);
+  } catch {
+    return setup.captureCharFrame();
   }
-  return text;
 }
 
 describe("App (imperative UI)", () => {
@@ -369,7 +371,7 @@ describe("App status bar", () => {
       const internals = app as unknown as {
         spinner: { content: { chunks: Array<{ text: string }> } };
         statusText: { content: { chunks: Array<{ fg?: { slot: number } }> } };
-        workTimer: unknown;
+        tickSubscription: unknown;
       };
       const mark = (): string =>
         internals.spinner.content.chunks.map((chunk) => chunk.text).join("");
@@ -381,7 +383,7 @@ describe("App status bar", () => {
         await Bun.sleep(60);
       }
       expect(burst.trim()).not.toBe("");
-      expect(internals.workTimer).not.toBeNull();
+      expect(internals.tickSubscription).not.toBeNull();
 
       // Once the burst is over, the summary carries the whole ramp sweeping
       // over its accent base.
@@ -424,9 +426,9 @@ describe("App status bar", () => {
       const text = await frameEventually(setup, (f) => f.includes("Done: 0 upgraded"));
       expect(text).toContain("Done: 0 upgraded, 1 failed.");
 
-      // No celebration for a failure: the tick is stopped.
-      const internals = app as unknown as { workTimer: unknown };
-      expect(internals.workTimer).toBeNull();
+      // No celebration for a failure: the animation clock is not subscribed.
+      const internals = app as unknown as { tickSubscription: unknown };
+      expect(internals.tickSubscription).toBeNull();
     } finally {
       app?.destroy();
       setup.renderer.destroy();

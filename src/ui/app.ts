@@ -16,6 +16,7 @@ import {
   type CliRenderer,
   type KeyEvent,
   type RGBA,
+  type Selection,
 } from "@opentui/core";
 import type { UpgradeResult } from "../types";
 import {
@@ -44,6 +45,7 @@ import {
 import { Checklist, type ChecklistRow } from "./checklist";
 import { OutputPane } from "./output";
 import { TerminalOverlay } from "./overlay-terminal";
+import { Toast } from "./toast";
 import { bandRamp, colors, shimmer, truncate } from "./theme";
 import { log, logPath } from "../log";
 
@@ -153,6 +155,7 @@ export class App {
   private readonly spinner: TextRenderable;
   private readonly statusText: TextRenderable;
   private readonly hintText: TextRenderable;
+  private readonly toast: Toast;
 
   private state: FlowState;
   private engine: Engine | null = null;
@@ -165,7 +168,13 @@ export class App {
   private workPhrases: string[] | null = null;
   /** Advances every ACTIVITY_MS; drives both the spinner and the phrase. */
   private workTick = 0;
-  private workTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Unsubscribes from the renderer's shared animation clock. One clock for the
+   * whole app (rather than a `setInterval` per widget) is what OpenTUI 0.8
+   * expects: a timer of our own draws its own frame, so two spinners drew two
+   * frames per tick.
+   */
+  private tickSubscription: (() => void) | null = null;
   /** When the summary went up, for timing the finish animation. */
   private summaryAt = 0;
   /** Only stage *changes* are logged, so `refresh` can log freely. */
@@ -242,8 +251,13 @@ export class App {
     status.add(this.hintText);
     this.root.add(status);
 
+    // Last child, so the badge paints over the panes it floats above.
+    this.toast = new Toast(renderer);
+    this.root.add(this.toast.root);
+
     renderer.root.add(this.root);
     renderer.keyInput.on("keypress", this.onKey);
+    renderer.on("selection", this.onSelection);
   }
 
   /** Mounts the UI, discovers sources, and resolves with the exit code. */
@@ -506,6 +520,33 @@ export class App {
   }
 
   // ---------------------------------------------------------------------------
+  // Clipboard
+  // ---------------------------------------------------------------------------
+  /**
+   * Copies a mouse selection to the clipboard as soon as it is made, and says so
+   * with a badge. OSC 52 is the portable path: no child process, no window, and
+   * it also works when the terminal is remote. It only *queues* the write, so a
+   * `false` here means the terminal refused it (or is a bare test renderer).
+   */
+  private onSelection = (selection: Selection): void => {
+    if (this.finished) return;
+    // A plain click is a zero-width selection; there is nothing to copy.
+    const text = selection.getSelectedText();
+    if (text.trim() === "") return;
+
+    let copied = false;
+    try {
+      copied = this.renderer.copyToClipboardOSC52(text);
+    } catch {
+      // The in-memory test renderer has no terminal to write to.
+      copied = false;
+    }
+    log("ui.clipboard", { chars: text.length, copied }, copied ? "info" : "warn");
+    const message = copied ? "✔ Copied" : "⚠ Copy failed";
+    this.toast.show(message, copied ? "good" : "warn");
+  };
+
+  // ---------------------------------------------------------------------------
   // Keyboard
   // ---------------------------------------------------------------------------
   private onKey = (key: KeyEvent): void => {
@@ -625,7 +666,9 @@ export class App {
     log("ui.quit", { code, reason });
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
+    this.renderer.off("selection", this.onSelection);
     this.stopWork();
+    this.toast.dispose();
     // Kill any hosted script and remove its overlay before the renderer goes.
     this.activeOverlay?.close("app-quit");
     this.output.dispose();
@@ -643,7 +686,9 @@ export class App {
     log("ui.destroy");
     this.finished = true;
     this.renderer.keyInput.off("keypress", this.onKey);
+    this.renderer.off("selection", this.onSelection);
     this.stopWork();
+    this.toast.dispose();
     this.activeOverlay?.close("app-destroy");
     this.output.dispose();
     this.resolveDone();
@@ -769,23 +814,26 @@ export class App {
       this.stopTick();
       return;
     }
-    if (this.workTimer !== null) return;
-    this.workTimer = setInterval(() => {
-      // A quit may have destroyed the render tree without the timer knowing.
-      if (this.finished) {
-        this.stopTick();
-        return;
-      }
-      this.workTick++;
-      this.renderStatus();
-      if (!this.isAnimating()) this.stopTick();
-    }, ACTIVITY_MS);
+    if (this.tickSubscription !== null) return;
+    this.tickSubscription = this.renderer.onAnimationTick(
+      1000 / ACTIVITY_MS,
+      () => {
+        // A quit may have destroyed the render tree without the clock knowing.
+        if (this.finished) {
+          this.stopTick();
+          return;
+        }
+        this.workTick++;
+        this.renderStatus();
+        if (!this.isAnimating()) this.stopTick();
+      },
+    );
   }
 
   private stopTick(): void {
-    if (this.workTimer === null) return;
-    clearInterval(this.workTimer);
-    this.workTimer = null;
+    if (this.tickSubscription === null) return;
+    this.tickSubscription();
+    this.tickSubscription = null;
   }
 
   /** Whether the bar still has something to animate (phrase or clean finish). */

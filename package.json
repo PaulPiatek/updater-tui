@@ -1,6 +1,6 @@
 {
   "name": "updater-tui",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -16,10 +16,10 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@opentui/core": "0.6.6"
+    "@opentui/core": "0.8.4"
   },
   "devDependencies": {
-    "@types/bun": "1.4.3",
+    "@types/bun": "1.4.4",
     "typescript": "7.0.2"
   }
 }
